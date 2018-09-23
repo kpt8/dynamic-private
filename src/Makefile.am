@@ -111,6 +111,8 @@ DYNAMIC_CORE_H = \
   bdap/entrylink.h \
   bdap/identity.h \
   dbwrapper.h \
+  dht/bootstrap.h \
+  dht/dhtsettings.h \
   dht/keyed25519.h \
   dynode.h \
   dynode-payments.h \
@@ -247,6 +249,8 @@ libdynamic_server_a_SOURCES = \
   bdap/entrylink.cpp \
   bdap/identity.cpp \
   dbwrapper.cpp \
+  dht/bootstrap.cpp \
+  dht/dhtsettings.cpp \
   dht/keyed25519.cpp \
   dynode.cpp \
   dynode-payments.cpp\
