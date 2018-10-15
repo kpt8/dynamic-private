@@ -18,10 +18,10 @@ using namespace libtorrent;
 CDHTSettings::CDHTSettings()
 {
     user_agent = "Dynamic v" + FormatFullVersion();
-    // Use ports 33307 and 33337
+    // Uses UDP ports 33307, 33317, 33327, 33337, 33347 and 33357
     listen_interfaces = "0.0.0.0:33307,[::]:33307,0.0.0.0:33317,[::]:33317";
-                        //"0.0.0.0:33327,[::]:33327,0.0.0.0:33337,[::]:33337"
-                        //"0.0.0.0:33347,[::]:33347";
+                        "0.0.0.0:33327,[::]:33327,0.0.0.0:33337,[::]:33337"
+                        "0.0.0.0:33347,[::]:33347,0.0.0.0:33357,[::]:33357";
 }
 
 void CDHTSettings::LoadPeerList()
