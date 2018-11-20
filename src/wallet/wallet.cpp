@@ -200,6 +200,35 @@ void CWallet::DeriveNewChildKey(const CKeyMetadata& metadata, CKey& secretRet, u
         throw std::runtime_error(std::string(__func__) + ": AddHDPubKey failed");
 }
 
+std::vector<unsigned char> CWallet::GenerateNewDHTKey(uint32_t nAccountIndex, bool fInternal)
+{
+    AssertLockHeld(cs_wallet); // mapKeyMetadata
+    
+    CKey secret;
+
+    // Create new metadata
+    int64_t nCreationTime = GetTime();
+    CKeyMetadata metadata(nCreationTime);
+
+    std::vector<unsigned char> pubkey;
+    // use HD key derivation if HD was enabled during wallet creation
+    if (IsHDEnabled()) {
+        DeriveNewChildKey(metadata, secret, nAccountIndex, fInternal);
+        CKeyEd25519 edKey(secret);
+        pubkey = edKey.GetPubKey();
+    } else {
+        secret.MakeNewKey(true);
+        CKeyEd25519 edKey(secret);
+        // Create new metadata
+        mapKeyMetadata[edKey.GetID()] = metadata;
+        UpdateTimeFirstKey(nCreationTime);
+
+        if (!AddDHTKey(edKey, pubkey))
+            throw std::runtime_error(std::string(__func__) + ": AddDHTKey failed");
+    }
+    return pubkey;
+}
+
 bool CWallet::GetPubKey(const CKeyID& address, CPubKey& vchPubKeyOut) const
 {
     LOCK(cs_wallet);
@@ -4285,6 +4314,36 @@ bool CWallet::GetKeyFromPool(CPubKey& result, bool fInternal)
         }
         KeepKey(nIndex);
         result = keypool.vchPubKey;
+    }
+    return true;
+}
+
+bool CWallet::GetDHTKeyFromPool(std::vector<unsigned char>& result, bool fInternal)
+{
+    int64_t nIndex = 0;
+    CKeyPool keypool;
+    {
+        LOCK(cs_wallet);
+        ReserveKeyFromKeyPool(nIndex, keypool, fInternal);
+        if (nIndex == -1) {
+            if (IsLocked(true))
+                return false;
+            // TODO: implement keypool for all accouts?
+            result = GenerateNewDHTKey(0, fInternal);
+            return true;
+        }
+        KeepKey(nIndex);
+        CPubKey pubKey = keypool.vchPubKey;
+        CKeyID keyID = pubKey.GetID();
+        CDynamicAddress address(keyID);
+        CKey vchSecret;
+        if (!pwalletMain->GetKey(keyID, vchSecret)) {
+            LogPrintf("Private key for address is not known\n");
+            return false;
+        }
+        
+        CKeyEd25519 key(vchSecret);
+        result = key.GetPubKey();
     }
     return true;
 }

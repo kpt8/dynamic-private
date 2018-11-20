@@ -5,6 +5,7 @@
 #include "ed25519.h"
 
 #include "hash.h"
+#include "key.h"
 #include "random.h"
 #include "util.h"
 
@@ -26,6 +27,36 @@ static ed25519_context* ed25519_context_sign = NULL;
 CKeyEd25519::CKeyEd25519(const std::array<char, 32>& _seed)
 {
     seed = _seed;
+    std::tuple<dht::public_key, dht::secret_key> keyPair = dht::ed25519_create_keypair(seed);
+    {
+        dht::secret_key sk = std::get<1>(keyPair);
+        privateKey = sk.bytes;
+    }
+    {
+        dht::public_key pk = std::get<0>(keyPair);
+        publicKey = pk.bytes;
+    }
+}
+
+CKeyEd25519::CKeyEd25519(const CKey& key)
+{
+    // TODO (DHT): Better way to convert secp256k1 to ed25519 key.
+    CPrivKey privKey = key.GetPrivKey();
+    assert(privKey.size() >= 190);
+    
+    unsigned int counter = 8;
+    for(unsigned int i = 0; i < 24; i++) {
+        seed[i] = privKey[counter];
+        counter++;
+        //LogPrintf("CKeyEd25519::CKeyEd25519 key size = %u. value = %d \n", i, privKey[counter]);
+    }
+    counter = 182;
+    for(unsigned int i = 0; i < 8; i++) {
+        seed[i + 24] = privKey[counter];
+        counter++;
+        //LogPrintf("CKeyEd25519::CKeyEd25519 key size = %u. value = %d \n", i + 24, privKey[counter]);
+    }
+
     std::tuple<dht::public_key, dht::secret_key> keyPair = dht::ed25519_create_keypair(seed);
     {
         dht::secret_key sk = std::get<1>(keyPair);

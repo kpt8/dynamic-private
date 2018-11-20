@@ -12,6 +12,8 @@
 #include <cstring>
 #include <memory>
 
+class CKey;
+
 static constexpr unsigned int ED25519_PUBLIC_KEY_BYTE_LENGTH        = 32;
 static constexpr unsigned int ED25519_PRIVATE_SEED_BYTE_LENGTH      = 32;
 static constexpr unsigned int ED25519_SIGTATURE_BYTE_LENGTH         = 64;
@@ -88,6 +90,8 @@ public:
 
     CKeyEd25519(const std::array<char, ED25519_PRIVATE_SEED_BYTE_LENGTH>& _seed);
     CKeyEd25519(const std::vector<unsigned char>& _seed);
+
+    CKeyEd25519(const CKey& key);
 
     //! Destructor (necessary because of memlocking). ??
     ~CKeyEd25519()

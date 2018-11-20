@@ -846,6 +846,8 @@ public:
      * Generate a new key
      */
     CPubKey GenerateNewKey(uint32_t nAccountIndex, bool fInternal /*= false*/);
+    //! keystore implementation for DHT keys
+    std::vector<unsigned char> GenerateNewDHTKey(uint32_t nAccountIndex, bool fInternal);
     //! HaveDHTKey implementation that also checks the mapHdPubKeys
     bool HaveDHTKey(const CKeyID &address) const;
     //! HaveKey implementation that also checks the mapHdPubKeys
@@ -992,6 +994,7 @@ public:
     void KeepKey(int64_t nIndex);
     void ReturnKey(int64_t nIndex, bool fInternal);
     bool GetKeyFromPool(CPubKey& key, bool fInternal /*= false*/);
+    bool GetDHTKeyFromPool(std::vector<unsigned char>& key, bool fInternal /*= false*/);
     int64_t GetOldestKeyPoolTime();
     void GetAllReserveKeys(std::set<CKeyID>& setAddress) const;
 

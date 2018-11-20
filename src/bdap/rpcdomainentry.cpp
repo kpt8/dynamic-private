@@ -64,11 +64,24 @@ static UniValue AddDomainEntry(const JSONRPCRequest& request, BDAP::ObjectType b
     txDomainEntry.WalletAddress = vchWalletAddress;
 
     // TODO: Add ability to pass in the DHT public key
+    /*
     CKeyEd25519 privDHTKey;
     CharString vchDHTPubKey = privDHTKey.GetPubKey();
     if (pwalletMain && !pwalletMain->AddDHTKey(privDHTKey, vchDHTPubKey))
         throw std::runtime_error("BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3503 - " + _("Error adding ed25519 key to wallet for BDAP"));
-    
+    */
+    CPubKey pubDHTKey;
+    if (pwalletMain && !pwalletMain->GetKeyFromPool(pubDHTKey, false))
+        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3502 Keypool ran out, please call keypoolrefill first");
+
+    CKeyID dhtKeyID = pubDHTKey.GetID();
+    CKey dhtPrivKey;
+    if (!pwalletMain->GetKey(dhtKeyID, dhtPrivKey))
+        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3503 DHT private key for address is not known");
+
+    CKeyEd25519 privDHTKey(dhtPrivKey);
+    CharString vchDHTPubKey = privDHTKey.GetPubKey();
+
     txDomainEntry.DHTPublicKey = vchDHTPubKey;
     pwalletMain->SetAddressBook(privDHTKey.GetID(), strObjectID, "bdap-dht-key");
 
