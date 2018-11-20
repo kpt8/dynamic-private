@@ -52,15 +52,12 @@ static UniValue AddDomainEntry(const JSONRPCRequest& request, BDAP::ObjectType b
         throw std::runtime_error("BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3500 - " + txDomainEntry.GetFullObjectPath() + _(" entry already exists.  Can not add duplicate."));
 
     // TODO: Add ability to pass in the wallet address
-    CKey privWalletKey;
-    privWalletKey.MakeNewKey(true);
-    CPubKey pubWalletKey = privWalletKey.GetPubKey();
+    CPubKey pubWalletKey;
+    if (pwalletMain && !pwalletMain->GetKeyFromPool(pubWalletKey, false))
+        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3501 Keypool ran out, please call keypoolrefill first");
+
     CKeyID keyWalletID = pubWalletKey.GetID();
     CDynamicAddress walletAddress = CDynamicAddress(keyWalletID);
-
-    if (pwalletMain && !pwalletMain->AddKeyPubKey(privWalletKey, pubWalletKey))
-        throw std::runtime_error("BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3502 - " + _("Error adding receiving address key wo wallet for BDAP"));
-
     pwalletMain->SetAddressBook(keyWalletID, strObjectID, "bdap-wallet");
     
     CharString vchWalletAddress = vchFromString(walletAddress.ToString());
@@ -69,23 +66,20 @@ static UniValue AddDomainEntry(const JSONRPCRequest& request, BDAP::ObjectType b
     // TODO: Add ability to pass in the DHT public key
     CKeyEd25519 privDHTKey;
     CharString vchDHTPubKey = privDHTKey.GetPubKey();
-    
     if (pwalletMain && !pwalletMain->AddDHTKey(privDHTKey, vchDHTPubKey))
         throw std::runtime_error("BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3503 - " + _("Error adding ed25519 key to wallet for BDAP"));
-
+    
     txDomainEntry.DHTPublicKey = vchDHTPubKey;
     pwalletMain->SetAddressBook(privDHTKey.GetID(), strObjectID, "bdap-dht-key");
 
     // TODO: Add ability to pass in the link address
     // TODO: Use stealth address for the link address so linking will be private
-    CKey privLinkKey;
-    privLinkKey.MakeNewKey(true);
-    CPubKey pubLinkKey = privLinkKey.GetPubKey();
+    CPubKey pubLinkKey;
+    if (pwalletMain && !pwalletMain->GetKeyFromPool(pubLinkKey, false))
+        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, "BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3504 Keypool ran out, please call keypoolrefill first");
+
     CKeyID keyLinkID = pubLinkKey.GetID();
     CDynamicAddress linkAddress = CDynamicAddress(keyLinkID);
-    if (pwalletMain && !pwalletMain->AddKeyPubKey(privLinkKey, pubLinkKey))
-        throw std::runtime_error("BDAP_ADD_PUBLIC_ENTRY_RPC_ERROR: ERRCODE: 3504 - " + _("Error adding receiving address key wo wallet for BDAP"));
-
     pwalletMain->SetAddressBook(keyLinkID, strObjectID, "bdap-link");
     
     CharString vchLinkAddress = vchFromString(linkAddress.ToString());
@@ -530,7 +524,7 @@ UniValue mybdapaccounts(const JSONRPCRequest& request)
 
     std::vector<std::vector<unsigned char>> vvchDHTPubKeys;
     if (pwalletMain && !pwalletMain->GetDHTPubKeys(vvchDHTPubKeys))
-        throw std::runtime_error("MY_BDAP_ACCOUNTS_RPC_ERROR: ERRCODE: 3800 - " + _("Error adding receiving address key wo wallet for BDAP"));
+        throw std::runtime_error("MY_BDAP_ACCOUNTS_RPC_ERROR: ERRCODE: 3800 - " + _("Error getting BDAP DHT address public keys from the wallet"));
 
     UniValue result(UniValue::VOBJ);
     uint32_t nCount = 1;
