@@ -11,6 +11,8 @@
 #include "dht/ed25519.h"
 #include "hdchain.h"
 #include "key.h"
+#include "key/extkey.h"
+#include "key/stealth.h"
 #include "pubkey.h"
 #include "script/script.h"
 #include "script/standard.h"
@@ -31,7 +33,8 @@ public:
     //! Add a key to the store.
     virtual bool AddKeyPubKey(const CKey& key, const CPubKey& pubkey) = 0;
     virtual bool AddKey(const CKey& key);
-
+    //! Check whether a key corresponding to a given address is present in the store.
+    virtual isminetype IsMine(const CKeyID &address) const =0;
     //! Check whether a key corresponding to a given address is present in the store.
     virtual bool HaveKey(const CKeyID &address) const =0;
     virtual bool HaveDHTKey(const CKeyID &address) const =0;
@@ -124,7 +127,9 @@ public:
     virtual bool HaveWatchOnly() const override;
 
     virtual bool GetHDChain(CHDChain& hdChainRet) const;
-    
+    //! Check whether a key corresponding to a given address is present in the store.
+    isminetype IsMine(const CKeyID &address) const;
+
     // TODO (BDAP): Change to virtual methods
     bool GetDHTPubKeys(std::vector<std::vector<unsigned char>>& vvchDHTPubKeys) const;
     bool AddDHTKey(const CKeyEd25519& key, const std::vector<unsigned char>& vchPubKey);

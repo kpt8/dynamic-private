@@ -78,6 +78,7 @@ DYNAMIC_CORE_H = \
   addressindex.h \
   addrman.h \
   alert.h \
+  attributes.h \
   base58.h \
   bdap/auditdata.h \
   bdap/bdap.h \
@@ -88,6 +89,7 @@ DYNAMIC_CORE_H = \
   bdap/entrycheckpoints.h \
   bdap/entrylink.h \
   bdap/identity.h \
+  bech32.h \
   bip39_english.h \
   bip39.h \
   blockencodings.h \
@@ -146,9 +148,14 @@ DYNAMIC_CORE_H = \
   indirectmap.h \
   init.h \
   instantsend.h \
-  key.h \
   keepass.h \
+  key.h \
   keystore.h \
+  key_io.h \
+  key/extkey.h \
+  key/keyutil.h \
+  key/stealth.h \
+  key/types.h \
   limitedmap.h \
   memusage.h \
   merkleblock.h \
@@ -340,6 +347,7 @@ libdynamic_wallet_a_SOURCES = \
   policy/rbf.cpp \
   privatesend-client.cpp \
   privatesend-util.cpp \
+  key/stealth.cpp \
   wallet/crypter.cpp \
   wallet/db.cpp \
   wallet/rpcdump.cpp \
@@ -422,6 +430,7 @@ libdynamic_common_a_CPPFLAGS = $(AM_CPPFLAGS) $(DYNAMIC_INCLUDES)
 libdynamic_common_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 libdynamic_common_a_SOURCES = \
   base58.cpp \
+  bech32.cpp \
   bip39.cpp \
   chainparams.cpp \
   coins.cpp \
@@ -432,6 +441,10 @@ libdynamic_common_a_SOURCES = \
   hdchain.cpp \
   key.cpp \
   keystore.cpp \
+  key_io.cpp \
+  key/extkey.cpp \
+  key/keyutil.cpp \
+  key/stealth.cpp \
   netaddress.cpp \
   netbase.cpp \
   protocol.cpp \

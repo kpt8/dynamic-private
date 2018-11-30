@@ -6,6 +6,7 @@
 
 #include "chainparams.h"
 #include "coins.h"
+#include "key_io.h"
 #include "policy/policy.h"
 #include "rpcclient.h"
 #include "rpcserver.h"

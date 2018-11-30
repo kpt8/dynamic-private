@@ -9,7 +9,7 @@
 #define DYNAMIC_WALLET_WALLET_H
 
 #include "amount.h"
-#include "base58.h"
+#include "key_io.h"
 #include "streams.h"
 #include "tinyformat.h"
 #include "ui_interface.h"
@@ -82,6 +82,7 @@ bool AutoBackupWallet(CWallet* wallet, std::string strWalletFile, std::string& s
 class CAccountingEntry;
 class CBlockIndex;
 class CCoinControl;
+struct CExtPubKey;
 class COutput;
 class CReserveKey;
 class CScript;

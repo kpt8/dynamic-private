@@ -6,6 +6,7 @@
 #include "bdap/domainentrydb.h"
 #include "dht/ed25519.h"
 #include "core_io.h" // needed for ScriptToAsmStr
+#include "key_io.h"
 #include "rpcprotocol.h"
 #include "rpcserver.h"
 #include "primitives/transaction.h"
