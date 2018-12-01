@@ -14,6 +14,8 @@
 #include "instantsend.h"
 #include "keepass.h"
 #include "key_io.h"
+#include "key/extkey.h"
+#include "key/stealth.h"
 #include "net.h"
 #include "netbase.h"
 #include "policy/rbf.h"
@@ -2791,6 +2793,65 @@ UniValue fundrawtransaction(const JSONRPCRequest& request)
     return result;
 }
 
+UniValue getnewstealthaddress(const JSONRPCRequest &request)
+{
+    if (!EnsureWalletIsAvailable(request.fHelp))
+        return NullUniValue;
+
+    if (request.fHelp || request.params.size() > 4)
+        throw std::runtime_error(
+            "getnewstealthaddress ( \"label\" num_prefix_bits prefix_num bech32 makeV2 )\n"
+            "Returns a new Dynamic stealth address for receiving payments."
+            + HelpRequiringPassphrase() +
+            "\nArguments:\n"
+            "1. \"label\"             (string, optional) If specified the key is added to the address book.\n"
+            "2. num_prefix_bits     (int, optional) If specified and > 0, the stealth address is created with a prefix.\n"
+            "3. prefix_num          (int, optional) If prefix_num is not specified the prefix will be selected deterministically.\n"
+            "           prefix_num can be specified in base2, 10 or 16, for base 2 prefix_num must begin with 0b, 0x for base16.\n"
+            "           A 32bit integer will be created from prefix_num and the least significant num_prefix_bits will become the prefix.\n"
+            "           A stealth address created without a prefix will scan all incoming stealth transactions, irrespective of transaction prefixes.\n"
+            "           Stealth addresses with prefixes will scan only incoming stealth transactions with a matching prefix.\n"
+            "4. bech32              (bool, optional, default=false) Use Bech32 encoding.\n"
+            "\nResult:\n"
+            "\"address\"              (string) The new dynamic stealth address\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getnewstealthaddress", "\"lblStealthAddrPrefix\" 3 \"0b101\"") +
+            "\nAs a JSON-RPC call\n"
+            + HelpExampleRpc("getnewstealthaddress", "\"lblStealthAddrPrefix\", 3, \"0b101\""));
+
+    EnsureWalletIsUnlocked();
+
+    std::string sLabel;
+    if (request.params.size() > 0)
+        sLabel = request.params[0].get_str();
+
+    uint32_t num_prefix_bits = 0;
+    if (request.params.size() > 1)
+    {
+        std::string s = request.params[1].get_str();
+        if (s.length() && !ParseUInt32(s, &num_prefix_bits))
+            throw JSONRPCError(RPC_INVALID_PARAMETER, _("num_prefix_bits invalid number."));
+    };
+
+    if (num_prefix_bits > 32)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, _("num_prefix_bits must be <= 32."));
+
+    std::string sPrefix_num;
+    if (request.params.size() > 2)
+        sPrefix_num = request.params[2].get_str();
+
+    bool fBech32 = request.params.size() > 3 ? request.params[3].get_bool() : false;
+    
+    CEKAStealthKey akStealth;
+    if (!pwalletMain->NewStealthKey(akStealth, num_prefix_bits, sPrefix_num.empty() ? nullptr : sPrefix_num.c_str(), fBech32))
+        throw JSONRPCError(RPC_WALLET_ERROR, _("NewStealthKey failed."));
+
+    CStealthAddress sxAddr;
+    akStealth.SetSxAddr(sxAddr);
+
+    return sxAddr.ToString(fBech32);
+}
+
 extern UniValue dumpprivkey(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue importprivkey(const JSONRPCRequest& request);
 extern UniValue importaddress(const JSONRPCRequest& request);
@@ -2869,6 +2930,7 @@ static const CRPCCommand commands[] =
         {"wallet", "dumpbdapkeys", &dumpbdapkeys, true, {"bdap_id"}},
         {"wallet", "importbdapkeys", &importbdapkeys,true, {"bdap_id", "wallet_privkey", "link_privkey", "DHT_privkey", "rescan"}},
         {"wallet", "importelectrumwallet", &importelectrumwallet, true, {"filename", "index"}},
+        {"wallet", "getnewstealthaddress", &getnewstealthaddress, true, {"label", "num_prefix_bits", "prefix_num", "bech32"}},
 };
 
 void RegisterWalletRPCCommands(CRPCTable& t)

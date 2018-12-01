@@ -1,4 +1,5 @@
 // Copyright (c) 2016-2018 Duality Blockchain Solutions Developers
+// Copyright (c) 2017-2018 The Particl Core developers
 // Copyright (c) 2014-2018 The Dash Core Developers
 // Copyright (c) 2009-2018 The Bitcoin Developers
 // Copyright (c) 2009-2018 Satoshi Nakamoto
@@ -29,6 +30,26 @@
 static uint64_t nAccountingEntryNumber = 0;
 
 static std::atomic<unsigned int> nWalletDBUpdateCounter;
+
+class PackKey
+{
+public:
+    PackKey(std::string s, const CKeyID& keyId, uint32_t nPack)
+        : m_prefix(s), m_keyId(keyId), m_nPack(nPack) { };
+
+    std::string m_prefix;
+    CKeyID m_keyId;
+    uint32_t m_nPack;
+
+    ADD_SERIALIZE_METHODS;
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action)
+    {
+        READWRITE(m_prefix);
+        READWRITE(m_keyId);
+        READWRITE(m_nPack);
+    };
+};
 
 //
 // CWalletDB
@@ -1030,3 +1051,68 @@ unsigned int CWalletDB::GetUpdateCounter()
 {
     return nWalletDBUpdateCounter;
 }
+
+bool CWalletDB::TxnBegin()
+{
+    return CDB::TxnBegin();
+}
+
+bool CWalletDB::ReadExtKey(const CKeyID& identifier, CStoredExtKey& ek32)
+{
+    return Read(std::make_pair(std::string("ek32"), identifier), ek32);
+};
+
+bool CWalletDB::WriteExtKey(const CKeyID& identifier, const CStoredExtKey& ek32)
+{
+    return Write(std::make_pair(std::string("ek32"), identifier), ek32);
+};
+
+bool CWalletDB::ReadNamedExtKeyId(const std::string& name, CKeyID& identifier)
+{
+    return Read(std::make_pair(std::string("eknm"), name), identifier);
+};
+
+bool CWalletDB::WriteNamedExtKeyId(const std::string& name, const CKeyID& identifier)
+{
+    return Write(std::make_pair(std::string("eknm"), name), identifier);
+};
+
+bool CWalletDB::ReadExtAccount(const CKeyID& identifier, CExtKeyAccount& ekAcc)
+{
+    return Read(std::make_pair(std::string("eacc"), identifier), ekAcc);
+};
+
+bool CWalletDB::WriteExtAccount(const CKeyID& identifier, const CExtKeyAccount& ekAcc)
+{
+    return Write(std::make_pair(std::string("eacc"), identifier), ekAcc);
+};
+
+bool CWalletDB::ReadExtKeyIndex(uint32_t id, CKeyID& identifier)
+{
+    return Read(std::make_pair(std::string("ine"), id), identifier);
+};
+
+bool CWalletDB::WriteExtKeyIndex(uint32_t id, const CKeyID& identifier)
+{
+    return Write(std::make_pair(std::string("ine"), id), identifier);
+};
+
+bool CWalletDB::ReadFlag(const std::string& name, int32_t& nValue)
+{
+    return Read(std::make_pair(std::string("flag"), name), nValue);
+};
+
+bool CWalletDB::WriteFlag(const std::string& name, const int32_t& nValue)
+{
+    return Write(std::make_pair(std::string("flag"), name), nValue);
+};
+
+bool CWalletDB::ReadExtStealthKeyPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKAStealthKeyPack>& aksPak)
+{
+    return Read(PackKey("espk", identifier, nPack), aksPak);
+};
+
+bool CWalletDB::WriteExtStealthKeyPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKAStealthKeyPack>& aksPak)
+{
+    return Write(PackKey("espk", identifier, nPack), aksPak);
+};

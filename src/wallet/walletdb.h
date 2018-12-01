@@ -1,4 +1,5 @@
 // Copyright (c) 2016-2018 Duality Blockchain Solutions Developers
+// Copyright (c) 2017-2018 The Particl Core developers
 // Copyright (c) 2014-2018 The Dash Core Developers
 // Copyright (c) 2009-2018 The Bitcoin Developers
 // Copyright (c) 2009-2018 Satoshi Nakamoto
@@ -147,6 +148,22 @@ public:
 
     static void IncrementUpdateCounter();
     static unsigned int GetUpdateCounter();
+    //! Begin add for stealth address transactions
+    //! Begin a new transaction
+    bool TxnBegin();
+    bool ReadExtKey(const CKeyID& identifier, CStoredExtKey& ek32);
+    bool WriteExtKey(const CKeyID& identifier, const CStoredExtKey& ek32);
+    bool ReadNamedExtKeyId(const std::string& name, CKeyID& identifier);
+    bool WriteNamedExtKeyId(const std::string& name, const CKeyID& identifier);
+    bool ReadExtAccount(const CKeyID& identifier, CExtKeyAccount& ekAcc);
+    bool WriteExtAccount(const CKeyID& identifier, const CExtKeyAccount& ekAcc);
+    bool ReadExtKeyIndex(uint32_t id, CKeyID& identifier);
+    bool WriteExtKeyIndex(uint32_t id, const CKeyID& identifier);
+    bool ReadFlag(const std::string& name, int32_t& nValue);
+    bool WriteFlag(const std::string& name, const int32_t& nValue);
+    bool ReadExtStealthKeyPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKAStealthKeyPack>& aksPak);
+    bool WriteExtStealthKeyPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKAStealthKeyPack>& aksPak);
+    //! End add for stealth address transactions
 
 private:
     CWalletDB(const CWalletDB&);

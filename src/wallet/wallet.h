@@ -1,4 +1,5 @@
 // Copyright (c) 2016-2018 Duality Blockchain Solutions Developers
+// Copyright (c) 2017-2018 The Particl Core developers
 // Copyright (c) 2014-2018 The Dash Core Developers
 // Copyright (c) 2009-2018 The Bitcoin Developers
 // Copyright (c) 2009-2018 Satoshi Nakamoto
@@ -82,12 +83,17 @@ bool AutoBackupWallet(CWallet* wallet, std::string strWalletFile, std::string& s
 class CAccountingEntry;
 class CBlockIndex;
 class CCoinControl;
+class CEKAStealthKey;
+class CExtKeyAccount;
 struct CExtPubKey;
 class COutput;
 class CReserveKey;
 class CScript;
 class CTxMemPool;
 class CWalletTx;
+
+typedef std::map<CKeyID, CExtKeyAccount*> ExtKeyAccountMap;
+typedef std::map<CKeyID, CStoredExtKey*> ExtKeyMap;
 
 /** (client) version numbers for particular wallet features */
 enum WalletFeature {
@@ -769,6 +775,7 @@ public:
 
     std::map<uint256, CWalletTx> mapWallet;
     std::list<CAccountingEntry> laccentries;
+    ExtKeyAccountMap mapExtAccounts;
 
     typedef std::pair<CWalletTx*, CAccountingEntry*> TxPair;
     typedef std::multimap<int64_t, TxPair> TxItems;
@@ -999,6 +1006,12 @@ public:
     std::set<std::set<CTxDestination> > GetAddressGroupings();
     std::map<CTxDestination, CAmount> GetAddressBalances();
 
+    // stealth addresses
+    std::set<CStealthAddress> stealthAddresses;
+    CStoredExtKey *pEKMaster = nullptr;
+    CKeyID idDefaultAccount;
+    ExtKeyMap mapExtKeys;
+
     CAmount GetAccountBalance(const std::string& strAccount, int nMinDepth, const isminefilter& filter, bool fAddLockConf);
     CAmount GetAccountBalance(CWalletDB& walletdb, const std::string& strAccount, int nMinDepth, const isminefilter& filter, bool fAddLockConf);
     std::set<CTxDestination> GetAccountAddresses(const std::string& strAccount) const;
@@ -1140,9 +1153,33 @@ public:
     bool SetHDChain(const CHDChain& chain, bool memonly);
     bool SetCryptedHDChain(const CHDChain& chain, bool memonly);
     bool GetDecryptedHDChain(CHDChain& hdChainRet);
-
     // Returns local BDAP DHT Public keys
     bool GetDHTPubKeys(std::vector<std::vector<unsigned char>>& vvchDHTPubKeys) const;
+
+    //! Begin add for stealth address transactions
+    int ExtKeyNew32(CExtKey& out);
+    int ExtKeyNew32(CExtKey& out, uint8_t* data, uint32_t lenData);
+    int ExtKeyUnlock(CStoredExtKey* sek, const CKeyingMaterial& vMKey);
+    int ExtKeyUnlock(CExtKeyAccount* sea, const CKeyingMaterial& vMKey);
+    int ExtKeyUnlock(CExtKeyAccount* sea);
+    int ExtKeyUnlock(CStoredExtKey* sek);
+    int ExtKeyEncrypt(CStoredExtKey* sek, const CKeyingMaterial& vMKey, bool fLockKey);
+    int ExtKeyEncrypt(CExtKeyAccount* sea, const CKeyingMaterial& vMKey, bool fLockKey);
+    int ExtKeyImportLoose(CStoredExtKey& sekIn, CKeyID& idDerived, bool fBip44, bool fSaveBip44);
+    int ExtKeySetMaster(CKeyID& idNewMaster);
+    int ExtKeyAddAccountToMaps(const CKeyID& idAccount, CExtKeyAccount* sea, bool fAddToLookAhead = true);
+    int ExtKeyCreateAccount(CStoredExtKey* sekAccount, CKeyID& idMaster, CExtKeyAccount& ekaOut, const std::string& sLabel);
+    int ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLabel, const std::string& sPath = "");
+    int ExtKeySaveAccountToDB(const CKeyID& idAccount, CExtKeyAccount* sea);
+    int ExtKeySetDefaultAccount(CKeyID& idNewDefault);
+    int ExtKeyRemoveAccountFromMapsAndFree(CExtKeyAccount* sea);
+    int ExtKeyRemoveAccountFromMapsAndFree(const CKeyID& idAccount);
+    int MakeDefaultAccount();
+    int ExtKeyNewIndex(const CKeyID& idKey, uint32_t& index);
+    int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index, bool& fUpdate);
+    int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index);
+    int NewStealthKey(CEKAStealthKey& akStealthOut, uint32_t nPrefixBits, const char* pPrefix, bool fBech32 = false);
+    //! End add for stealth address transactions
 };
 
 /** A key allocated from the key pool. */
