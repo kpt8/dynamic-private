@@ -15,14 +15,16 @@
 //#include <script/ismine.h>
 #include <wallet/wallet_ismine.h>
 
-static const uint32_t MAX_DERIVE_TRIES = 16;
-static const uint32_t BIP32_KEY_LEN = 82;       // raw, 74 + 4 bytes id + 4 checksum
-static const uint32_t BIP32_KEY_N_BYTES = 74;   // raw without id and checksum
+static constexpr uint32_t MAX_DERIVE_TRIES = 16;
+static constexpr uint32_t BIP32_KEY_LEN = 82;       // raw, 74 + 4 bytes id + 4 checksum
+static constexpr uint32_t BIP32_KEY_N_BYTES = 74;   // raw without id and checksum
 
-static const uint32_t MAX_KEY_PACK_SIZE = 128;
-static const uint32_t N_DEFAULT_LOOKAHEAD = 64;
+static constexpr uint32_t MAX_KEY_PACK_SIZE = 128;
+static constexpr uint32_t N_DEFAULT_LOOKAHEAD = 64;
 
-static const uint32_t BIP44_PURPOSE = (((uint32_t)44) | (1 << 31));
+static constexpr uint32_t BIP44_PURPOSE = (((uint32_t)44) | (1 << 31));
+
+static constexpr uint32_t MAX_LABEL_SIZE = 64;
 
 typedef std::map<uint8_t, std::vector<uint8_t> > mapEKValue_t;
 
@@ -90,29 +92,15 @@ struct CExtPubKey {
     void Decode(const unsigned char code[BIP32_EXTKEY_SIZE]);
     bool Derive(CExtPubKey& out, unsigned int nChild) const;
 
-    void Serialize(CSizeComputer& s) const
-    {
-        // Optimized implementation for ::GetSerializeSize that avoids copying.
-        s.seek(BIP32_EXTKEY_SIZE + 1); // add one byte for the size (compact int)
-    }
-    template <typename Stream>
-    void Serialize(Stream& s) const
-    {
-        unsigned int len = BIP32_EXTKEY_SIZE;
-        ::WriteCompactSize(s, len);
-        unsigned char code[BIP32_EXTKEY_SIZE];
-        Encode(code);
-        s.write((const char*)&code[0], len);
-    }
-    template <typename Stream>
-    void Unserialize(Stream& s)
-    {
-        unsigned int len = ::ReadCompactSize(s);
-        unsigned char code[BIP32_EXTKEY_SIZE];
-        if (len != BIP32_EXTKEY_SIZE)
-            throw std::runtime_error("Invalid extended key size\n");
-        s.read((char*)&code[0], len);
-        Decode(code);
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(nDepth);
+        READWRITE(FLATDATA(vchFingerprint));
+        READWRITE(VARINT(nChild));
+        READWRITE(chaincode);
+        READWRITE(pubkey);
     }
 };
 
@@ -132,6 +120,7 @@ struct CExtKey {
                a.key == b.key;
     }
 
+    bool IsValid() const { return key.IsValid(); }
 
     void Encode(unsigned char code[BIP32_EXTKEY_SIZE]) const;
     void Decode(const unsigned char code[BIP32_EXTKEY_SIZE]);
@@ -139,22 +128,20 @@ struct CExtKey {
     CExtPubKey Neutered() const;
     void SetMaster(const unsigned char* seed, unsigned int nSeedLen);
     void SetSeed(const unsigned char *seed, unsigned int nSeedLen);
-    template <typename Stream>
-    void Serialize(Stream& s) const
-    {
-        unsigned int len = BIP32_EXTKEY_SIZE;
-        ::WriteCompactSize(s, len);
-        unsigned char code[BIP32_EXTKEY_SIZE];
-        Encode(code);
-        s.write((const char*)&code[0], len);
-    }
-    template <typename Stream>
-    void Unserialize(Stream& s)
-    {
-        unsigned int len = ::ReadCompactSize(s);
-        unsigned char code[BIP32_EXTKEY_SIZE];
-        s.read((char*)&code[0], len);
-        Decode(code);
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(VARINT(nDepth));
+        READWRITE(FLATDATA(vchFingerprint));
+        READWRITE(VARINT(nChild));
+        READWRITE(chaincode);
+        std::vector<unsigned char> vchKey(key.begin(), key.end());
+        READWRITE(vchKey);
+        if (ser_action.ForRead()) {
+            key.Set(vchKey.begin(), vchKey.end(), true);
+        }
     }
 };
 
@@ -236,39 +223,20 @@ public:
     void SetSeed(const unsigned char *seed, unsigned int nSeedLen);
     int SetKeyCode(const unsigned char *pkey, const unsigned char *pcode);
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s.write((char*)&nDepth, 1);
-        s.write((char*)vchFingerprint, 4);
-        s.write((char*)&nChild, 4);
-        s.write(chaincode, 32);
+    ADD_SERIALIZE_METHODS;
 
-        char fValid = key.IsValid();
-        s.write((char*)&fValid, 1);
-        if (fValid) {
-            s.write((char*)key.begin(), 32);
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(VARINT(nDepth));
+        READWRITE(FLATDATA(vchFingerprint));
+        READWRITE(VARINT(nChild));
+        READWRITE(chaincode);
+        std::vector<unsigned char> vchKey(key.begin(), key.end());
+        READWRITE(vchKey);
+        if (ser_action.ForRead()) {
+            key.Set(vchKey.begin(), vchKey.end(), true);
         }
-
-        pubkey.Serialize(s);
-    }
-    template<typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s.read((char*)&nDepth, 1);
-        s.read((char*)vchFingerprint, 4);
-        s.read((char*)&nChild, 4);
-        s.read(chaincode, 32);
-
-        char tmp[33];
-        s.read((char*)tmp, 1); // key.IsValid()
-        if (tmp[0]) {
-            s.read((char*)tmp+1, 32);
-            key.Set((uint8_t*)tmp+1, 1);
-        } else {
-            key.Clear();
-        }
-        pubkey.Unserialize(s);
+        READWRITE(pubkey);
     }
 };
 
@@ -283,6 +251,20 @@ public:
         nHGenerated = 0;
         nLastLookAhead = 0;
     };
+
+    // When encrypted, pk can't be derived from vk
+    CExtKeyPair kp;
+    std::vector<uint8_t> vchCryptedSecret;
+
+    std::string sLabel;
+
+    uint8_t fLocked; // not part of nFlags so not saved
+    uint32_t nFlags;
+    uint32_t nGenerated;
+    uint32_t nHGenerated;
+    uint32_t nLastLookAhead; // in memory only
+
+    mapEKValue_t mapValue;
 
     std::string GetIDString58() const;
 
@@ -306,13 +288,13 @@ public:
     int DeriveKey(T &keyOut, uint32_t nChildIn, uint32_t &nChildOut, bool fHardened = false) const
     {
         if (fHardened && !kp.IsValidV()) {
-            return error("Ext key does not contain a secret.");
+            return errorN(1, "Ext key does not contain a secret.");
         }
 
         for (uint32_t i = 0; i < MAX_DERIVE_TRIES; ++i) {
             if ((nChildIn >> 31) == 1) {
                 // TODO: auto spawn new master key
-                return error("No more %skeys can be derived from master.", fHardened ? "hardened " : "");
+                return errorN(1, "No more %skeys can be derived from master.", fHardened ? "hardened " : "");
             }
 
             uint32_t nNum = fHardened ? nChildIn | 1 << 31 : nChildIn;
@@ -345,6 +327,7 @@ public:
         return 0;
     };
 
+
     int SetCounter(uint32_t nC, bool fHardened)
     {
         if (fHardened) {
@@ -373,50 +356,23 @@ public:
         return ISMINE_WATCH_UNSOLVABLE;
     };
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        // Never save secret data when key is encrypted
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
         if (vchCryptedSecret.size() > 0) {
             CExtKeyPair kpt = kp.Neutered();
-            s << kpt;
+            READWRITE(kpt);
         } else {
-            s << kp;
+            READWRITE(kp);
         }
-
-        s << vchCryptedSecret;
-        s << sLabel;
-        s << nFlags;
-        s << nGenerated;
-        s << nHGenerated;
-        s << mapValue;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> kp;
-
-        s >> vchCryptedSecret;
-        s >> sLabel;
-        s >> nFlags;
-        s >> nGenerated;
-        s >> nHGenerated;
-        s >> mapValue;
-    };
-
-    // When encrypted, pk can't be derived from vk
-    CExtKeyPair kp;
-    std::vector<uint8_t> vchCryptedSecret;
-
-    std::string sLabel;
-
-    uint8_t fLocked; // not part of nFlags so not saved
-    uint32_t nFlags;
-    uint32_t nGenerated;
-    uint32_t nHGenerated;
-    uint32_t nLastLookAhead; // in memory only
-
-    mapEKValue_t mapValue;
+        READWRITE(vchCryptedSecret);
+        READWRITE(LIMITED_STRING(sLabel, MAX_LABEL_SIZE));
+        READWRITE(nFlags);
+        READWRITE(VARINT(nGenerated));
+        READWRITE(VARINT(nHGenerated));
+        READWRITE(mapValue);
+    }
 };
 
 
@@ -426,26 +382,19 @@ public:
     CEKAKey() : nParent(0), nKey(0) {};
     CEKAKey(uint32_t nParent_, uint32_t nKey_) : nParent(nParent_), nKey(nKey_) {};
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << nParent;
-        s << nKey;
-        s << sLabel;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> nParent;
-        s >> nKey;
-        s >> sLabel;
-    };
-
     uint32_t nParent; // chain identifier, vExtKeys
     uint32_t nKey;
-
     //uint32_t nChecksum; // TODO: is it worth storing 4 bytes of the id (160 hash here)
     std::string sLabel; // TODO: remove
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(nParent);
+        READWRITE(nKey);
+        READWRITE(LIMITED_STRING(sLabel, MAX_LABEL_SIZE));
+    }
 };
 
 
@@ -456,27 +405,24 @@ public:
     CEKASCKey() {};
     CEKASCKey(CKeyID &idStealthKey_, CKey &sShared_) : idStealthKey(idStealthKey_), sShared(sShared_) {};
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << idStealthKey;
-        s.write((char*)sShared.begin(), EC_SECRET_SIZE);
-        s << sLabel;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> idStealthKey;
-        s.read((char*)sShared.begin(), EC_SECRET_SIZE);
-        sShared.SetFlags(true, true);
-        s >> sLabel;
-    };
     // TODO: store an offset instead of the full id of the stealth address
     CKeyID idStealthKey; // id of parent stealth key (received on)
     CKey sShared;
-
     //uint32_t nChecksum; // TODO: is it worth storing 4 bytes of the id (160 hash here)
     std::string sLabel; // TODO: remove
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(idStealthKey);
+        std::vector<unsigned char> vchSharedKey(sShared.begin(), sShared.end());
+        READWRITE(vchSharedKey);
+        if (ser_action.ForRead()) {
+            sShared.Set(vchSharedKey.begin(), vchSharedKey.end(), true);
+        }
+        READWRITE(LIMITED_STRING(sLabel, MAX_LABEL_SIZE));
+    }
 };
 
 class CEKAStealthKey
@@ -505,46 +451,6 @@ public:
         nPrefix = nPrefix_;
     };
 
-    std::string ToStealthAddress() const;
-    int SetSxAddr(CStealthAddress &sxAddr) const;
-
-    int ToRaw(std::vector<uint8_t> &raw) const;
-
-    CKeyID GetID() const
-    {
-        // Not likely to be called very often
-        return skScan.GetPubKey().GetID();
-    };
-
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << nFlags;
-        s << sLabel;
-        s << nScanParent;
-        s << nScanKey;
-        s << skScan;
-        s << akSpend;
-        s << pkScan;
-        s << pkSpend;
-        s << nPrefixBits;
-        s << nPrefix;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> nFlags;
-        s >> sLabel;
-        s >> nScanParent;
-        s >> nScanKey;
-        s >> skScan;
-        s >> akSpend;
-        s >> pkScan;
-        s >> pkSpend;
-        s >> nPrefixBits;
-        s >> nPrefix;
-    };
-
     uint8_t nFlags; // options of CStealthAddress
     std::string sLabel;
     uint32_t nScanParent; // vExtKeys
@@ -557,6 +463,35 @@ public:
 
     uint8_t nPrefixBits;
     uint32_t nPrefix;
+
+    std::string ToStealthAddress() const;
+    int SetSxAddr(CStealthAddress &sxAddr) const;
+
+    int ToRaw(std::vector<uint8_t> &raw) const;
+    CKeyID GetID() const
+    {
+        // Not likely to be called very often
+        return skScan.GetPubKey().GetID();
+    };
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(VARINT(nFlags));
+        READWRITE(LIMITED_STRING(sLabel, MAX_LABEL_SIZE));
+        READWRITE(VARINT(nScanParent));
+        READWRITE(VARINT(nScanKey));
+        std::vector<unsigned char> vchScanKey(skScan.begin(), skScan.end());
+        READWRITE(vchScanKey);
+        if (ser_action.ForRead()) {
+            skScan.Set(vchScanKey.begin(), vchScanKey.end(), true);
+        }
+        READWRITE(akSpend);
+        READWRITE(pkSpend);
+        READWRITE(VARINT(nPrefixBits));
+        READWRITE(VARINT(nPrefix));
+    }
 };
 
 class CEKAKeyPack
@@ -565,21 +500,16 @@ public:
     CEKAKeyPack() {};
     CEKAKeyPack(CKeyID id_, const CEKAKey &ak_) : id(id_), ak(ak_) {};
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << id;
-        s << ak;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> id;
-        s >> ak;
-    };
-
     CKeyID id;
     CEKAKey ak;
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(id);
+        READWRITE(ak);
+    }
 };
 
 class CEKASCKeyPack
@@ -588,21 +518,15 @@ public:
     CEKASCKeyPack() {};
     CEKASCKeyPack(CKeyID id_, const CEKASCKey &asck_) : id(id_), asck(asck_) {};
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << id;
-        s << asck;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> id;
-        s >> asck;
-    };
-
     CKeyID id;
     CEKASCKey asck;
+
+    ADD_SERIALIZE_METHODS;
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(id);
+        READWRITE(asck);
+    }
 };
 
 class CEKAStealthKeyPack
@@ -611,21 +535,15 @@ public:
     CEKAStealthKeyPack() {};
     CEKAStealthKeyPack(CKeyID id_, const CEKAStealthKey &aks_) : id(id_), aks(aks_) {};
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << id;
-        s << aks;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> id;
-        s >> aks;
-    };
-
     CKeyID id;
     CEKAStealthKey aks;
+
+    ADD_SERIALIZE_METHODS;
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(id);
+        READWRITE(aks);
+    }
 };
 
 
@@ -647,6 +565,40 @@ public:
         nPackStealth = 0;
         nPackStealthKeys = 0;
     };
+
+    // TODO: Could store used keys in archived packs, which don't get loaded into memory
+    AccKeyMap mapKeys;
+    AccKeyMap mapLookAhead;
+
+    AccKeySCMap mapStealthChildKeys; // keys derived from stealth addresses
+
+    AccStealthKeyMap mapStealthKeys;
+    AccStealthKeyMap mapLookAheadStealth;
+
+    std::string sLabel; // account name
+    CKeyID idMaster;
+
+    uint32_t nActiveExternal;
+    uint32_t nActiveInternal;
+    uint32_t nActiveStealth;
+
+    // Note: Stealth addresses consist of 2 secret keys, one of which (scan secret) must remain unencrypted while wallet locked
+    // store a separate child key used only to derive secret keys
+    // Stealth addresses must only ever be generated as hardened keys
+
+    mutable CCriticalSection cs_account;
+
+    // 0th key is always the account key
+    std::vector<CStoredExtKey*> vExtKeys;
+    std::vector<CKeyID> vExtKeyIDs;
+
+    int nHeightCheckedUncrypted; // last block checked while uncrypted
+
+    uint32_t nFlags;
+    uint32_t nPack;
+    uint32_t nPackStealth;
+    uint32_t nPackStealthKeys;
+    mapEKValue_t mapValue;
 
     int FreeChains()
     {
@@ -771,76 +723,22 @@ public:
 
     int WipeEncryption();
 
-    template<typename Stream>
-    void Serialize(Stream &s) const
-    {
-        s << sLabel;
-        s << idMaster;
-
-        s << nActiveExternal;
-        s << nActiveInternal;
-        s << nActiveStealth;
-
-        s << vExtKeyIDs;
-        s << nHeightCheckedUncrypted;
-        s << nFlags;
-        s << nPack;
-        s << nPackStealth;
-        s << nPackStealthKeys;
-        s << mapValue;
-    };
-    template <typename Stream>
-    void Unserialize(Stream &s)
-    {
-        s >> sLabel;
-        s >> idMaster;
-
-        s >> nActiveExternal;
-        s >> nActiveInternal;
-        s >> nActiveStealth;
-
-        s >> vExtKeyIDs;
-        s >> nHeightCheckedUncrypted;
-        s >> nFlags;
-        s >> nPack;
-        s >> nPackStealth;
-        s >> nPackStealthKeys;
-        s >> mapValue;
-    };
-
-    // TODO: Could store used keys in archived packs, which don't get loaded into memory
-    AccKeyMap mapKeys;
-    AccKeyMap mapLookAhead;
-
-    AccKeySCMap mapStealthChildKeys; // keys derived from stealth addresses
-
-    AccStealthKeyMap mapStealthKeys;
-    AccStealthKeyMap mapLookAheadStealth;
-
-    std::string sLabel; // account name
-    CKeyID idMaster;
-
-    uint32_t nActiveExternal;
-    uint32_t nActiveInternal;
-    uint32_t nActiveStealth;
-
-    // Note: Stealth addresses consist of 2 secret keys, one of which (scan secret) must remain unencrypted while wallet locked
-    // store a separate child key used only to derive secret keys
-    // Stealth addresses must only ever be generated as hardened keys
-
-    mutable CCriticalSection cs_account;
-
-    // 0th key is always the account key
-    std::vector<CStoredExtKey*> vExtKeys;
-    std::vector<CKeyID> vExtKeyIDs;
-
-    int nHeightCheckedUncrypted; // last block checked while uncrypted
-
-    uint32_t nFlags;
-    uint32_t nPack;
-    uint32_t nPackStealth;
-    uint32_t nPackStealthKeys;
-    mapEKValue_t mapValue;
+    ADD_SERIALIZE_METHODS;
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(LIMITED_STRING(sLabel, MAX_LABEL_SIZE));
+        READWRITE(idMaster);
+        READWRITE(VARINT(nActiveExternal));
+        READWRITE(VARINT(nActiveInternal));
+        READWRITE(VARINT(nActiveStealth));
+        READWRITE(vExtKeyIDs);
+        READWRITE(VARINT(nHeightCheckedUncrypted));
+        READWRITE(VARINT(nFlags));
+        READWRITE(VARINT(nPack));
+        READWRITE(VARINT(nPackStealth));
+        READWRITE(VARINT(nPackStealthKeys));
+        READWRITE(mapValue);
+    }
 };
 
 
