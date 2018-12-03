@@ -14,6 +14,23 @@
 #include "serialize.h"
 #include "uint256.h"
 
+enum OutputTypes
+{
+    OUTPUT_NULL             = 0, // marker for CCoinsView (0.14)
+    OUTPUT_STANDARD         = 1,
+    OUTPUT_DATA             = 4, 
+};
+
+enum DataOutputTypes
+{
+    DO_NULL                 = 0, // reserved
+    DO_NARR_PLAIN           = 1,
+    DO_NARR_CRYPT           = 2,
+    DO_STEALTH              = 3,
+    DO_STEALTH_PREFIX       = 4,
+    DO_BDAP                 = 7,
+};
+
 /** An outpoint - a combination of a transaction hash and an index n into its vout */
 class COutPoint
 {

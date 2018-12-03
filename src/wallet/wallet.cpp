@@ -5336,17 +5336,17 @@ int CWallet::ExtKeyUnlock(CStoredExtKey* sek, const CKeyingMaterial& vMKey)
     CKeyingMaterial vchSecret;
     uint256 iv = Hash(sek->kp.pubkey.begin(), sek->kp.pubkey.end());
     if (!DecryptSecret(vMKey, sek->vchCryptedSecret, iv, vchSecret) || vchSecret.size() != 32) {
-        return error("%s: Failed decrypting ext key.  %s", __func__, sek->GetIDString58());
+        return errorN(1, "%s: Failed decrypting ext key.  %s", __func__, sek->GetIDString58());
     }
 
     CKey key;
     key.Set(vchSecret.begin(), vchSecret.end(), true);
     if (!key.IsValid()) {
-        return error("%s: Invalid unlocked key %s", __func__, sek->GetIDString58());
+        return errorN(1, "%s: Invalid unlocked key %s", __func__, sek->GetIDString58());
     }
 
     if (key.GetPubKey() != sek->kp.pubkey) {
-        return error("%s: Ext pubkey and unlocked public mismatch. %s and %s", __func__, sek->kp.pubkey.GetID().ToString(), key.GetPubKey().GetID().ToString());
+        return errorN(1, "%s: Ext pubkey and unlocked public mismatch. %s and %s", __func__, sek->kp.pubkey.GetID().ToString(), key.GetPubKey().GetID().ToString());
     }
 
     sek->kp.key = key;
@@ -5393,7 +5393,7 @@ int CWallet::ExtKeyEncrypt(CStoredExtKey* sek, const CKeyingMaterial& vMKey, boo
     CPubKey pubkey = sek->kp.pubkey;
     CKeyingMaterial vchSecret(sek->kp.key.begin(), sek->kp.key.end());
     if (!EncryptSecret(vMKey, vchSecret, pubkey.GetHash(), vchCryptedSecret)) {
-        return error("%s: EncryptSecret failed.", __func__);
+        return errorN(1, "%s: EncryptSecret failed.", __func__);
     }
 
     sek->nFlags |= EAF_IS_CRYPTED;
@@ -5429,7 +5429,7 @@ int CWallet::ExtKeyEncrypt(CExtKeyAccount* sea, const CKeyingMaterial& vMKey, bo
         }
 
         if (sek->kp.IsValidV() && ExtKeyEncrypt(sek, vMKey, fLockKey) != 0) {
-            return 1;
+            return errorN(1, "%s: IsValidV or error in ExtKeyEncrypt", __func__);
         }
     }
 
@@ -5443,7 +5443,7 @@ int CWallet::ExtKeyImportLoose(CStoredExtKey& sekIn, CKeyID& idDerived, bool fBi
     AssertLockHeld(cs_wallet);
 
     if (IsLocked()) {
-        return error("%s: Wallet must be unlocked.", __func__);
+        return errorN(1, "%s: Wallet must be unlocked.", __func__);
     }
 
     CKeyID id = sekIn.GetID();
@@ -5464,7 +5464,7 @@ int CWallet::ExtKeyImportLoose(CStoredExtKey& sekIn, CKeyID& idDerived, bool fBi
 
     if (pwdb->ReadExtKey(id, sekExist)) {
         if (IsCrypted() && 0 != ExtKeyUnlock(&sekExist, vMasterKey)) {
-            return error("%s: %s", __func__, ExtKeyGetString(13));
+            return errorN(1, "%s: %s", __func__, ExtKeyGetString(13));
         }
 
         sek = sekExist;
@@ -5507,27 +5507,27 @@ int CWallet::ExtKeyImportLoose(CStoredExtKey& sekIn, CKeyID& idDerived, bool fBi
             if (fSaveBip44 && !fsekInExist) {
                 // Assume the user wants to save the bip44 key, drop down
             } else {
-                return error("%s: %s", __func__, ExtKeyGetString(12));
+                return errorN(1, "%s: %s", __func__, ExtKeyGetString(12));
                 
             }
         } else {
             if (IsCrypted() && (ExtKeyEncrypt(&sekDerived, vMasterKey, false) != 0)) {
-                return error("%s: ExtKeyEncrypt failed.", __func__);
+                return errorN(1, "%s: ExtKeyEncrypt failed.", __func__);
             }
 
             if (!pwdb->WriteExtKey(idDerived, sekDerived)) {
-                return error("%s: DB Write failed.", __func__);
+                return errorN(1, "%s: DB Write failed.", __func__);
             }
         }
     }
 
     if (!fBip44 || fSaveBip44) {
         if (IsCrypted() && ExtKeyEncrypt(&sek, vMasterKey, false) != 0) {
-            return error("%s: ExtKeyEncrypt failed.", __func__);
+            return errorN(1, "%s: ExtKeyEncrypt failed.", __func__);
         }
 
         if (!pwdb->WriteExtKey(id, sek)) {
-            return error("%s: DB Write failed.", __func__);
+            return errorN(1, "%s: DB Write failed.", __func__);
         }
     }
 
@@ -5552,14 +5552,14 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
     assert(pwdb);
 
     if (IsLocked()) {
-        return error("%s: Wallet must be unlocked.", __func__);
+        return errorN(1, "%s: Wallet must be unlocked.", __func__);
     }
 
     CKeyID idOldMaster;
     bool fOldMaster = pwdb->ReadNamedExtKeyId("master", idOldMaster);
 
     if (idNewMaster == idOldMaster) {
-        return error("%s: New master is the same as previous master key id. %s", __func__, ExtKeyGetString(11));
+        return errorN(1, "%s: New master is the same as previous master key id. %s", __func__, ExtKeyGetString(11));
     }
 
     ExtKeyMap::iterator mi;
@@ -5573,7 +5573,7 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
         fNew = true;
         if (!pwdb->ReadExtKey(idNewMaster, *pEKNewMaster)) {
             delete pEKNewMaster;
-            return error("%s: ReadExtKey failed. %s", __func__, ExtKeyGetString(10));
+            return errorN(1, "%s: ReadExtKey failed. %s", __func__, ExtKeyGetString(10));
         }
     }
 
@@ -5583,14 +5583,14 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
         if (fNew) {
             delete pEKNewMaster;
         }
-        return error("%s: Prevent setting bip44 root key as a master key %s", __func__, ExtKeyGetString(9));
+        return errorN(1, "%s: Prevent setting bip44 root key as a master key %s", __func__, ExtKeyGetString(9));
     }
 
     if (ExtKeyUnlock(pEKNewMaster) != 0 || !pEKNewMaster->kp.IsValidV()) {
         if (fNew) {
             delete pEKNewMaster;
         }
-        return error("%s: New master ext key has no secret.", __func__);
+        return errorN(1, "%s: New master ext key has no secret.", __func__);
     }
 
     std::vector<uint8_t> v;
@@ -5600,7 +5600,7 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
         if (fNew) {
             delete pEKNewMaster;
         }
-        return error("%s: WriteExtKey failed.", __func__);
+        return errorN(1, "%s: WriteExtKey failed.", __func__);
     }
 
     // Unset old master ext key
@@ -5613,7 +5613,7 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
                 if (fNew) {
                     delete pEKNewMaster;
                 }
-                return error("%s: ReadExtKey failed.", __func__);
+                return errorN(1, "%s: ReadExtKey failed.", __func__);
             }
             pEKOldMaster = &ekOldMaster;
         }
@@ -5628,7 +5628,7 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
                 if (fNew) {
                     delete pEKNewMaster;
                 } 
-                return error("%s: WriteExtKey failed.", __func__);
+                return errorN(1, "%s: WriteExtKey failed.", __func__);
             }
         }
     }
@@ -5702,7 +5702,7 @@ int CWallet::ExtKeyCreateAccount(CStoredExtKey* sekAccount, CKeyID& idMaster, CE
         if (sekAccount->DeriveNextKey(evExternal, nExternal, false) != 0
             || sekAccount->DeriveNextKey(evInternal, nInternal, false) != 0
             || sekAccount->DeriveNextKey(evStealth, nStealth, true) != 0) {
-            return error("%s: CExtKey Could not derive account chain keys.", __func__);
+            return errorN(1, "%s: CExtKey Could not derive account chain keys.", __func__);
         }
 
         sekExternal->kp = evExternal;
@@ -5714,7 +5714,7 @@ int CWallet::ExtKeyCreateAccount(CStoredExtKey* sekAccount, CKeyID& idMaster, CE
         CExtPubKey epExternal, epInternal;
         if (sekAccount->DeriveNextKey(epExternal, nExternal, false) != 0
             || sekAccount->DeriveNextKey(epInternal, nInternal, false) != 0) {
-            return error("%s: CExtPubKey Could not derive account chain keys.", __func__);
+            return errorN(1, "%s: CExtPubKey Could not derive account chain keys.", __func__);
         }
         sekExternal->kp = epExternal;
         sekInternal->kp = epInternal;
@@ -5761,7 +5761,7 @@ int CWallet::ExtKeyCreateAccount(CStoredExtKey* sekAccount, CKeyID& idMaster, CE
             delete sekStealth;
         }
         // sekAccount should be freed in calling function
-        return error("%s: ExtKeyEncrypt failed", __func__);
+        return errorN(1, "%s: ExtKeyEncrypt failed", __func__);
     }
 
     return 0;
@@ -5783,12 +5783,12 @@ int CWallet::ExtKeySaveAccountToDB(const CKeyID& idAccount, CExtKeyAccount* sea)
     for (size_t i = 0; i < sea->vExtKeys.size(); ++i) {
         CStoredExtKey *sek = sea->vExtKeys[i];
         if (!pwdb->WriteExtKey(sea->vExtKeyIDs[i], *sek)) {
-            return error("%s: ExtKeyEncrypt failed", __func__);
+            return errorN(1, "%s: ExtKeyEncrypt failed", __func__);
         }
     }
 
     if (!pwdb->WriteExtAccount(idAccount, *sea)) {
-        return error("%s: ExtKeyEncrypt failed", __func__);
+        return errorN(1, "%s: ExtKeyEncrypt failed", __func__);
     }
 
     return 0;
@@ -5809,11 +5809,11 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
     assert(sea);
 
     if (IsLocked()) {
-        return error("%s: Wallet must be unlocked.", __func__);
+        return errorN(1, "%s: Wallet must be unlocked.", __func__);
     }
 
     if (!pEKMaster || !pEKMaster->kp.IsValidV()) {
-        return error("%s: Master ext key is invalid.", __func__);
+        return errorN(1, "%s: Master ext key is invalid.", __func__);
     }
 
     CKeyID idMaster = pEKMaster->GetID();
@@ -5825,7 +5825,7 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
     if (sPath.length() == 0) {
         if (pEKMaster->DeriveNextKey(evAccountKey, nAccount, true, true) != 0) {
             delete sekAccount;
-            return error("%s: Could not derive account key from master.", __func__);
+            return errorN(1, "%s: Could not derive account key from master.", __func__);
         }
         sekAccount->kp = evAccountKey;
         sekAccount->mapValue[EKVT_PATH] = PushUInt32(vAccountPath, nAccount);
@@ -5834,7 +5834,7 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
         int rv;
         if ((rv = ExtractExtKeyPath(sPath, vPath)) != 0) {
             delete sekAccount;
-            return error("%s: ExtractExtKeyPath failed %s.", __func__, ExtKeyGetString(rv));
+            return errorN(1, "%s: ExtractExtKeyPath failed %s.", __func__, ExtKeyGetString(rv));
         }
 
         CExtKey vkOut;
@@ -5842,7 +5842,7 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
         for (std::vector<uint32_t>::iterator it = vPath.begin(); it != vPath.end(); ++it) {
             if (!vkWork.Derive(vkOut, *it)) {
                 delete sekAccount;
-                return error("%s: CExtKey Derive failed %s, %d.", __func__,sPath.c_str(), *it);
+                return errorN(1, "%s: CExtKey Derive failed %s, %d.", __func__,sPath.c_str(), *it);
             }
             PushUInt32(vAccountPath, *it);
 
@@ -5856,14 +5856,14 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
     if (!sekAccount->kp.IsValidV() || !sekAccount->kp.IsValidP()) {
         delete sekAccount;
         pEKMaster->SetCounter(nOldHGen, true);
-        return error("%s: Invalid key.", __func__);
+        return errorN(1, "%s: Invalid key.", __func__);
     }
 
     sekAccount->nFlags |= EAF_ACTIVE | EAF_IN_ACCOUNT;
     if (0 != ExtKeyCreateAccount(sekAccount, idMaster, *sea, sLabel)) {
         delete sekAccount;
         pEKMaster->SetCounter(nOldHGen, true);
-        return error("%s: ExtKeyCreateAccount failed.", __func__);
+        return errorN(1, "%s: ExtKeyCreateAccount failed.", __func__);
     }
 
     CKeyID idAccount = sea->GetID();
@@ -5872,18 +5872,18 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
     if (pwdb->ReadExtKey(idAccount, checkSEA)) {
         sea->FreeChains();
         pEKMaster->SetCounter(nOldHGen, true);
-        return error("%s: Account already exists in db.", __func__);
+        return errorN(1, "%s: Account already exists in db.", __func__);
     }
 
     if (!pwdb->WriteExtKey(idMaster, *pEKMaster) || 0 != ExtKeySaveAccountToDB(idAccount, sea)) {
         sea->FreeChains();
         pEKMaster->SetCounter(nOldHGen, true);
-        return error("%s: DB Write failed.", __func__);
+        return errorN(1, "%s: DB Write failed.", __func__);
     }
 
     if (0 != ExtKeyAddAccountToMaps(idAccount, sea)) {
         sea->FreeChains();
-        return error("%s: ExtKeyAddAccountToMaps() failed.", __func__);
+        return errorN(1, "%s: ExtKeyAddAccountToMaps() failed.", __func__);
     }
 
     return 0;
@@ -5910,7 +5910,7 @@ int CWallet::ExtKeySetDefaultAccount(CKeyID& idNewDefault)
     // Read account from db, inactive accounts are not loaded into maps
     if (!pwdb->ReadExtAccount(idNewDefault, *sea)) {
         delete sea;
-        return error("%s: Account not in wallet.", __func__);
+        return errorN(1, "%s: Account not in wallet.", __func__);
     }
 
     // If !EAF_ACTIVE, rewrite with EAF_ACTIVE set
@@ -5918,20 +5918,20 @@ int CWallet::ExtKeySetDefaultAccount(CKeyID& idNewDefault)
         sea->nFlags |= EAF_ACTIVE;
         if (!pwdb->WriteExtAccount(idNewDefault, *sea)) {
             delete sea;
-            return error("%s: WriteExtAccount() failed.", __func__);
+            return errorN(1, "%s: WriteExtAccount() failed.", __func__);
         }
     }
 
     if (!pwdb->WriteNamedExtKeyId("defaultAccount", idNewDefault)) {
         delete sea;
-        return error("%s: WriteNamedExtKeyId() failed.", __func__);
+        return errorN(1, "%s: WriteNamedExtKeyId() failed.", __func__);
     }
 
     ExtKeyAccountMap::iterator mi = mapExtAccounts.find(idNewDefault);
     if (mi == mapExtAccounts.end()) {
         if (0 != ExtKeyAddAccountToMaps(idNewDefault, sea)) {
             delete sea;
-            return error("%s: ExtKeyAddAccountToMaps() failed.", __func__);
+            return errorN(1, "%s: ExtKeyAddAccountToMaps() failed.", __func__);
         }
         // sea will be freed in FreeExtKeyMaps
     } else {
@@ -5967,7 +5967,7 @@ int CWallet::ExtKeyRemoveAccountFromMapsAndFree(const CKeyID& idAccount)
 {
     ExtKeyAccountMap::iterator mi = mapExtAccounts.find(idAccount);
     if (mi == mapExtAccounts.end()) {
-        return error("%s: Account %s not found.", __func__, HDAccIDToString(idAccount));
+        return errorN(1, "%s: Account %s not found.", __func__, HDAccIDToString(idAccount));
     }
     return ExtKeyRemoveAccountFromMapsAndFree(mi->second);
 };
@@ -6001,7 +6001,7 @@ int CWallet::MakeDefaultAccount()
 
     if (0 != ExtKeyNew32(ekMaster)) {
         pwdb->TxnAbort();
-        return 1;
+        return errorN(1, "%s-- ExtKeyNew32 failed.", __func__);
     }
 
     CStoredExtKey sek;
@@ -6009,14 +6009,14 @@ int CWallet::MakeDefaultAccount()
     if (0 != (rv = ExtKeyImportLoose(sek, idNewMaster, false, false))) {
         LogPrintf(" -- TODO Fix TxnAbort%s\n", __func__);
         pwdb->TxnAbort();
-        return error("%s-- ExtKeyImportLoose failed, %s", __func__, ExtKeyGetString(rv));
+        return errorN(1, "%s-- ExtKeyImportLoose failed, %s", __func__, ExtKeyGetString(rv));
     }
 
     idNewMaster = sek.GetID();
     if (0 != (rv = ExtKeySetMaster(idNewMaster))) {
         LogPrintf(" -- TODO Fix TxnAbort%s\n", __func__);
         pwdb->TxnAbort();
-        return error("%s -- ExtKeySetMaster failed, %s.", __func__, ExtKeyGetString(rv));
+        return errorN(1, "%s -- ExtKeySetMaster failed, %s.", __func__, ExtKeyGetString(rv));
     }
 
     sea = new CExtKeyAccount();
@@ -6024,7 +6024,7 @@ int CWallet::MakeDefaultAccount()
         ExtKeyRemoveAccountFromMapsAndFree(sea);
         LogPrintf(" -- TODO Fix TxnAbort%s\n", __func__);
         pwdb->TxnAbort();
-        return error("%s -- ExtKeyDeriveNewAccount failed, %s.", __func__, ExtKeyGetString(rv));
+        return errorN(1, "%s -- ExtKeyDeriveNewAccount failed, %s.", __func__, ExtKeyGetString(rv));
     }
 
     CKeyID idNewDefaultAccount = sea->GetID();
@@ -6033,7 +6033,7 @@ int CWallet::MakeDefaultAccount()
         ExtKeyRemoveAccountFromMapsAndFree(sea);
         LogPrintf(" -- TODO Fix TxnAbort%s\n", __func__);
         pwdb->TxnAbort();
-        return error("%s -- ExtKeySetDefaultAccount failed, %s.", __func__, ExtKeyGetString(rv));
+        return errorN(1, "%s -- ExtKeySetDefaultAccount failed, %s.", __func__, ExtKeyGetString(rv));
     }
     return 0;
 }
@@ -6066,13 +6066,13 @@ int CWallet::ExtKeyNewIndex(const CKeyID& idKey, uint32_t& index)
     index++;
 
     if (index == lastId) {
-        return error("%s -- Wallet extkey index is full!", __func__); // expect multiple wallets per node before anyone hits this
+        return errorN(1, "%s -- Wallet extkey index is full!", __func__); // expect multiple wallets per node before anyone hits this
     }
 
     LogPrint("hdwallet", "%s: New index %u.\n", __func__, index);
     if (!pwdb->WriteExtKeyIndex(index, idKey)
         || !pwdb->WriteFlag("ekLastI", (int32_t&)index)) {
-        return error("%s -- WriteExtKeyIndex failed.", __func__);
+        return errorN(1, "%s -- WriteExtKeyIndex failed.", __func__);
     }
 
     return 0;
@@ -6090,7 +6090,7 @@ int CWallet::ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index, bool& fUpdate)
 
     CKeyID idAccount = sea->GetID();
     if (0 != ExtKeyNewIndex(idAccount, index)) {
-        return error("%s -- ExtKeyNewIndex failed.", __func__);
+        return errorN(1, "%s -- ExtKeyNewIndex failed.", __func__);
     }
     std::vector<uint8_t> vTmp;
     sea->mapValue[EKVT_INDEX] = PushUInt32(vTmp, index);
@@ -6113,13 +6113,13 @@ int CWallet::ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index)
 
     bool requireUpdateDB;
     if (0 != ExtKeyGetIndex(sea, index, requireUpdateDB)) {
-        return error("%s -- ExtKeyGetIndex failed.", __func__);
+        return errorN(1, "%s -- ExtKeyGetIndex failed.", __func__);
     }
 
     if (requireUpdateDB) {
         CKeyID idAccount = sea->GetID();
         if (!pwdb->WriteExtAccount(idAccount, *sea)) {
-            return error("%s -- Save account chain failed.", __func__);
+            return errorN(1, "%s -- Save account chain failed.", __func__);
         }
     }
 
@@ -6132,7 +6132,7 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
     const CKeyID idAccount = idDefaultAccount;
 
     if (IsLocked()) {
-        return error("%s -- Wallet must be unlocked to derive hardened keys.", __func__);
+        return errorN(1, "%s -- Wallet must be unlocked to derive hardened keys.", __func__);
     }
     CWalletDB* pwdb;
     if (IsCrypted()) {
@@ -6145,14 +6145,14 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
 
     ExtKeyAccountMap::iterator mi = mapExtAccounts.find(idAccount);
     if (mi == mapExtAccounts.end()) {
-        return error("%s -- Unknown account.", __func__);
+        return errorN(1, "%s -- Unknown account.", __func__);
     }
 
     CExtKeyAccount *sea = mi->second;
     uint32_t nChain = sea->nActiveStealth;
     CStoredExtKey *sek = sea->GetChain(nChain);
     if (!sek) {
-        return error("%s -- Stealth chain unknown %d.", __func__, nChain);
+        return errorN(1, "%s -- Stealth chain unknown %d.", __func__, nChain);
     }
 
     uint32_t nChildBkp = sek->nHGenerated;
@@ -6160,18 +6160,18 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
     CKey kScan, kSpend;
     uint32_t nScanOut, nSpendOut;
     if (0 != sek->DeriveNextKey(kScan, nScanOut, true)) {
-        return error("%s -- Derive scan key failed.", __func__);
+        return errorN(1, "%s -- Derive scan key failed.", __func__);
     }
 
     if (0 != sek->DeriveNextKey(kSpend, nSpendOut, true)) {
         sek->SetCounter(nChildBkp, true);
-        return error("%s -- Derive spend key failed.", __func__);
+        return errorN(1, "%s -- Derive spend key failed.", __func__);
     }
 
     uint32_t nPrefix = 0;
     if (pPrefix) {
         if (!ExtractStealthPrefix(pPrefix, nPrefix)) {
-            return error("%s -- ExtractStealthPrefix.", __func__);
+            return errorN(1, "%s -- ExtractStealthPrefix.", __func__);
         }
     } else
     if (nPrefixBits > 0) {
@@ -6190,7 +6190,7 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
 
     CStealthAddress sxAddr;
     if (0 != aks.SetSxAddr(sxAddr)) {
-        return error("%s -- SetSxAddr failed.", __func__);
+        return errorN(1, "%s -- SetSxAddr failed.", __func__);
     }
 
     // Set path for address book
@@ -6217,9 +6217,7 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
     if (!pwdb->ReadExtStealthKeyPack(idAccount, sea->nPackStealth, aksPak)) {
         // New pack
         aksPak.clear();
-        if (LogAcceptCategory("hdwallet")) {
-            LogPrintf("Account %s, starting new stealth keypack %u.\n", idAccount.ToString(), sea->nPackStealth);
-        }
+        LogPrint("hdwallet", "Account %s, starting new stealth keypack %u.\n", idAccount.ToString(), sea->nPackStealth);
     }
 
     aksPak.push_back(CEKAStealthKeyPack(idKey, aks));
@@ -6227,26 +6225,158 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
     if (!pwdb->WriteExtStealthKeyPack(idAccount, sea->nPackStealth, aksPak)) {
         sea->mapStealthKeys.erase(idKey);
         sek->SetCounter(nChildBkp, true);
-        return error("%s -- Save key pack %u failed.", __func__, sea->nPackStealth);
+        return errorN(1, "%s -- Save key pack %u failed.", __func__, sea->nPackStealth);
     }
 
     if (!pwdb->WriteExtKey(sea->vExtKeyIDs[nChain], *sek)) {
         sea->mapStealthKeys.erase(idKey);
         sek->SetCounter(nChildBkp, true);
-        return error("%s -- Save account chain failed.", __func__);
+        return errorN(1, "%s -- Save account chain failed.", __func__);
     }
 
     if ((uint32_t)aksPak.size() >= MAX_KEY_PACK_SIZE-1) {
         sea->nPackStealth++;
         CKeyID idAccount = sea->GetID();
         if (!pwdb->WriteExtAccount(idAccount, *sea)) {
-            return error("%s -- WriteExtAccount failed.", __func__);
+            return errorN(1, "%s -- WriteExtAccount failed.", __func__);
         }
     }
 
     SetAddressBook(sxAddr, sLabel, "receive");
 
     akStealthOut = aks;
+    return 0;
+};
+
+int CWallet::ExtKeyGetDestination(const CExtKeyPair& ek, CPubKey& pkDest, uint32_t& nKey)
+{
+    if (LogAcceptCategory("hdwallet")) {
+        CExtKey58 ek58;
+        ek58.SetKeyP(ek);
+        LogPrintf("%s: %s.\n", __func__, ek58.ToString());
+        AssertLockHeld(cs_wallet);
+    }
+
+    /*
+    Get the next destination,
+    if key is not saved yet, return 1st key
+    don't save key here, save after derived key has been successfully used
+    */
+
+    CKeyID keyId = ek.GetID();
+    CWalletDB* pwdb;
+    if (IsCrypted()) {
+        pwdb = pwalletdbEncryption;
+    }
+    else {
+        pwdb = new CWalletDB(strWalletFile, "cr+");
+    }
+    assert(pwdb);
+
+    CStoredExtKey sek;
+    if (pwdb->ReadExtKey(keyId, sek)) {
+        if (0 != sek.DeriveNextKey(pkDest, nKey)) {
+            return errorN(1, "%s -- DeriveNextKey failed.\n", __func__);
+        }
+        return 0;
+    } else {
+        nKey = 0; // AddLookAhead starts from 0
+        for (uint32_t i = 0; i < MAX_DERIVE_TRIES; ++i) {
+            if (ek.Derive(pkDest, nKey)) {
+                return 0;
+            }
+            nKey++;
+        }
+    }
+    return errorN(1, "%s -- Could not derive key.\n", __func__);
+};
+
+int CWallet::ExpandStealthRecipients(std::vector<CTempRecipient>& vecSend, CStoredExtKey* pc, std::string& sError)
+{
+    LOCK(cs_wallet);
+    //uint32_t nChild;
+    for (size_t i = 0; i < vecSend.size(); ++i) {
+        CTempRecipient &r = vecSend[i];
+
+        if (r.nType == OUTPUT_STANDARD) {
+            if (r.address.type() == typeid(CStealthAddress)) {
+                CStealthAddress sx = boost::get<CStealthAddress>(r.address);
+
+                CKey sShared;
+                ec_point pkSendTo;
+
+                int k, nTries = 24;
+                for (k = 0; k < nTries; ++k) { // if StealthSecret fails try again with new ephem key
+                    r.sEphem.MakeNewKey(true);
+                    if (StealthSecret(r.sEphem, sx.scan_pubkey, sx.spend_pubkey, sShared, pkSendTo) == 0) {
+                        break;
+                    }
+                }
+                if (k >= nTries) {
+                    return errorN(1, "%s -- Could not generate receiving public key.\n", __func__);
+                }
+
+                CPubKey pkEphem = r.sEphem.GetPubKey();
+                r.pkTo = CPubKey(pkSendTo);
+                CKeyID idTo = r.pkTo.GetID();
+                r.scriptPubKey = GetScriptForDestination(idTo);
+                // save r.sEphem in local wallet.
+                CKey epthKey = r.sEphem;
+                if (!AddKeyPubKey(epthKey, r.pkTo)) {
+                    LogPrintf("Failed to save stealth sEphem key %s\n", CDynamicAddress(idTo).ToString());
+                }
+                else {
+                    LogPrintf("Added stealth sEphem key to local wallet. %s\n", CDynamicAddress(idTo).ToString());
+                }
+                LogPrint("hdwallet", "Stealth send to generated address: %s\n", CDynamicAddress(idTo).ToString());
+                
+                CTempRecipient rd;
+                rd.nType = OUTPUT_DATA;
+
+                if (0 != MakeStealthData(r.sNarration, sx.prefix, sShared, pkEphem, rd.vData, r.nStealthPrefix, sError)) {
+                    return 1;
+                }
+                vecSend.insert(vecSend.begin() + (i+1), rd);
+                i++; // skip over inserted output
+            } else {
+                if (r.address.type() == typeid(CExtKeyPair)) {
+                    CExtKeyPair ek = boost::get<CExtKeyPair>(r.address);
+                    CPubKey pkDest;
+                    uint32_t nChildKey;
+                    if (0 != ExtKeyGetDestination(ek, pkDest, nChildKey)) {
+                        return errorN(1, "%s -- ExtKeyGetDestination failed.\n", __func__);
+                    }
+
+                    r.nChildKey = nChildKey;
+                    r.pkTo = pkDest;
+                    r.scriptPubKey = GetScriptForDestination(pkDest.GetID());
+                } else
+                if (r.address.type() == typeid(CKeyID)) {
+                    r.scriptPubKey = GetScriptForDestination(r.address);
+                } else {
+                    if (!r.fScriptSet) {
+                        r.scriptPubKey = GetScriptForDestination(r.address);
+                        if (r.scriptPubKey.size() < 1) {
+                            return errorN(1, "%s -- Unknown address type and no script set.\n", __func__);
+                        }
+                    }
+                }
+
+                if (r.sNarration.length() > 0) {
+                    CTempRecipient rd;
+                    rd.nType = OUTPUT_DATA;
+
+                    std::vector<uint8_t> vNarr;
+                    rd.vData.push_back(DO_NARR_PLAIN);
+                    std::copy(r.sNarration.begin(), r.sNarration.end(), std::back_inserter(rd.vData));
+
+                    vecSend.insert(vecSend.begin() + (i+1), rd);
+                    i++; // skip over inserted output
+                }
+            }
+        }
+    }
+
     return 0;
 };
 //! End add for stealth address transactions

@@ -630,6 +630,67 @@ private:
     std::vector<char> _ssExtra;
 };
 
+class CTempRecipient
+{
+public:
+    CTempRecipient() : nType(0), nAmount(0), nAmountSelected(0), fSubtractFeeFromAmount(false) {SetNull();};
+    CTempRecipient(CAmount nAmount_, bool fSubtractFeeFromAmount_, CScript scriptPubKey_)
+        : nAmount(nAmount_), nAmountSelected(nAmount_), fSubtractFeeFromAmount(fSubtractFeeFromAmount_), scriptPubKey(scriptPubKey_) {SetNull();};
+
+    void SetNull()
+    {
+        fNonceSet = false; // if true use nonce and vData from CTempRecipient
+        fScriptSet = false;
+        fChange = false;
+        nChildKey = 0;
+        nChildKeyColdStaking = 0;
+        nStealthPrefix = 0;
+        fSplitBlindOutput = false;
+        fExemptFeeSub = false;
+    };
+
+    void SetAmount(CAmount nValue)
+    {
+        nAmount = nValue;
+        nAmountSelected = nValue;
+    };
+
+    bool ApplySubFee(CAmount nFee, size_t nSubtractFeeFromAmount, bool &fFirst);
+
+    uint8_t nType;
+    CAmount nAmount;            // If fSubtractFeeFromAmount, nAmount = nAmountSelected - feeForOutput
+    CAmount nAmountSelected;
+    bool fSubtractFeeFromAmount;
+    bool fSplitBlindOutput;
+    bool fExemptFeeSub;         // Value too low to sub fee when blinded value split into two outputs
+    CTxDestination address;
+    CTxDestination addressColdStaking;
+    CScript scriptPubKey;
+    std::vector<uint8_t> vData;
+    std::vector<uint8_t> vBlind;
+    std::vector<uint8_t> vRangeproof;
+    //secp256k1_pedersen_commitment commitment;
+    uint256 nonce;
+
+    // TODO: range proof parameters, try to keep similar for fee
+    // Allow an overwrite of the parameters.
+    bool fOverwriteRangeProofParams = false;
+    uint64_t min_value;
+    int ct_exponent;
+    int ct_bits;
+
+    CKey sEphem;
+    CPubKey pkTo;
+    int n;
+    std::string sNarration;
+    bool fScriptSet;
+    bool fChange;
+    bool fNonceSet;
+    uint32_t nChildKey; // update later
+    uint32_t nChildKeyColdStaking; // update later
+    uint32_t nStealthPrefix;
+};
+
 /** 
  * A CWallet is an extension of a keystore, which also maintains a set of transactions and balances,
  * and provides the ability to create new transactions.
@@ -1179,6 +1240,8 @@ public:
     int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index, bool& fUpdate);
     int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index);
     int NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBits, const char* pPrefix, bool fBech32 = false);
+    int ExtKeyGetDestination(const CExtKeyPair& ek, CPubKey& pkDest, uint32_t& nKey);
+    int ExpandStealthRecipients(std::vector<CTempRecipient>& vecSend, CStoredExtKey* pc, std::string& sError);
     //! End add for stealth address transactions
 };
 
