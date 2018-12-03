@@ -1178,7 +1178,7 @@ public:
     int ExtKeyNewIndex(const CKeyID& idKey, uint32_t& index);
     int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index, bool& fUpdate);
     int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index);
-    int NewStealthKey(CEKAStealthKey& akStealthOut, uint32_t nPrefixBits, const char* pPrefix, bool fBech32 = false);
+    int NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBits, const char* pPrefix, bool fBech32 = false);
     //! End add for stealth address transactions
 };
 

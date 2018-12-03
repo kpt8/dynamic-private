@@ -2843,8 +2843,8 @@ UniValue getnewstealthaddress(const JSONRPCRequest &request)
     bool fBech32 = request.params.size() > 3 ? request.params[3].get_bool() : false;
     
     CEKAStealthKey akStealth;
-    if (!pwalletMain->NewStealthKey(akStealth, num_prefix_bits, sPrefix_num.empty() ? nullptr : sPrefix_num.c_str(), fBech32))
-        throw JSONRPCError(RPC_WALLET_ERROR, _("NewStealthKey failed."));
+    if (0 != pwalletMain->NewStealthAddress(akStealth, num_prefix_bits, sPrefix_num.empty() ? nullptr : sPrefix_num.c_str(), fBech32))
+        throw JSONRPCError(RPC_WALLET_ERROR, _("NewStealthAddress failed."));
 
     CStealthAddress sxAddr;
     akStealth.SetSxAddr(sxAddr);
