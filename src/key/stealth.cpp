@@ -6,13 +6,12 @@
 #include <key/stealth.h>
 
 #include <chainparams.h>
+#include <crypto/crypter.h>
 #include <key_io.h>
 #include <key/keyutil.h>
 #include <pubkey.h>
 #include <random.h>
 #include <script/script.h>
-//#include <smsg/crypter.h>
-
 #include <support/allocators/secure.h>
 
 #include <cmath>
@@ -374,8 +373,6 @@ bool ExtractStealthPrefix(const char *pPrefix, uint32_t &nPrefix)
 int MakeStealthData(const std::string &sNarration, stealth_prefix prefix, const CKey &sShared, const CPubKey &pkEphem,
     std::vector<uint8_t> &vData, uint32_t &nStealthPrefix, std::string &sError)
 {
-    // TODO (stealth) Add #include <smsg/crypter.h>
-    /*
     std::vector<uint8_t> vchNarr;
     if (sNarration.length() > 0) {
         SecMsgCrypter crypter;
@@ -411,7 +408,7 @@ int MakeStealthData(const std::string &sNarration, stealth_prefix prefix, const 
         memcpy(&vData[o], &vchNarr[0], vchNarr.size());
         o += vchNarr.size();
     }
-    */
+
     return 0;
 };
 

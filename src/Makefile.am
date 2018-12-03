@@ -361,9 +361,13 @@ libdynamic_wallet_a_SOURCES = \
 crypto_libdynamic_crypto_a_CPPFLAGS = $(AM_CPPFLAGS) $(DYNAMIC_CONFIG_INCLUDES) $(PIC_FLAGS)
 crypto_libdynamic_crypto_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS) $(PIC_FLAGS)
 crypto_libdynamic_crypto_a_SOURCES = \
-  crypto/chacha20.h \
+  crypto/aes.cpp \
+  crypto/aes.h \
   crypto/chacha20.cpp \
+  crypto/chacha20.h \
   crypto/common.h \
+  crypto/crypter.cpp \
+  crypto/crypter.h \
   crypto/argon2d/argon2.h \
   crypto/argon2d/core.h \
   crypto/argon2d/encoding.h \
@@ -582,6 +586,12 @@ libdynamicconsensus_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 endif
 #
 
+CTAES_DIST =  crypto/ctaes/bench.c
+CTAES_DIST += crypto/ctaes/ctaes.c
+CTAES_DIST += crypto/ctaes/ctaes.h
+CTAES_DIST += crypto/ctaes/test.c
+EXTRA_DIST = $(CTAES_DIST)
+
 CLEANFILES = leveldb/libleveldb.a leveldb/libmemenv.a
 CLEANFILES += *.gcda *.gcno
 CLEANFILES += bdap/*.gcda bdap/*.gcno
@@ -600,7 +610,7 @@ CLEANFILES += zmq/*.gcda zmq/*.gcno
 
 DISTCLEANFILES = obj/build.h
 
-EXTRA_DIST = leveldb
+EXTRA_DIST += leveldb
 
 clean-local:
 	-$(MAKE) -C leveldb clean
