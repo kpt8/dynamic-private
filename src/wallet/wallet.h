@@ -183,6 +183,11 @@ struct CRecipient {
     bool fSubtractFeeFromAmount;
 };
 
+struct CRecipientData {
+    DataOutputTypes nType;
+    std::vector<uint8_t> vData;
+};
+
 typedef std::map<std::string, std::string> mapValue_t;
 
 
@@ -643,9 +648,7 @@ public:
         fScriptSet = false;
         fChange = false;
         nChildKey = 0;
-        nChildKeyColdStaking = 0;
         nStealthPrefix = 0;
-        fSplitBlindOutput = false;
         fExemptFeeSub = false;
     };
 
@@ -661,23 +664,14 @@ public:
     CAmount nAmount;            // If fSubtractFeeFromAmount, nAmount = nAmountSelected - feeForOutput
     CAmount nAmountSelected;
     bool fSubtractFeeFromAmount;
-    bool fSplitBlindOutput;
     bool fExemptFeeSub;         // Value too low to sub fee when blinded value split into two outputs
     CTxDestination address;
-    CTxDestination addressColdStaking;
     CScript scriptPubKey;
     std::vector<uint8_t> vData;
-    std::vector<uint8_t> vBlind;
-    std::vector<uint8_t> vRangeproof;
-    //secp256k1_pedersen_commitment commitment;
+
     uint256 nonce;
 
-    // TODO: range proof parameters, try to keep similar for fee
-    // Allow an overwrite of the parameters.
-    bool fOverwriteRangeProofParams = false;
     uint64_t min_value;
-    int ct_exponent;
-    int ct_bits;
 
     CKey sEphem;
     CPubKey pkTo;
@@ -687,7 +681,6 @@ public:
     bool fChange;
     bool fNonceSet;
     uint32_t nChildKey; // update later
-    uint32_t nChildKeyColdStaking; // update later
     uint32_t nStealthPrefix;
 };
 
@@ -1026,6 +1019,7 @@ public:
      * selected by SelectCoins(); Also create the change output, when needed
      */
     bool CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet, int& nChangePosInOut, std::string& strFailReason, const CCoinControl* coinControl = NULL, bool sign = true, AvailableCoinsType nCoinType = ALL_COINS, bool fUseInstantSend = false, bool fIsBDAP = false);
+    bool CreateTransaction(const std::vector<CRecipient>& vecSend, const std::vector<CRecipientData>& vecSendData, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet, int& nChangePosInOut, std::string& strFailReason, const CCoinControl* coinControl = NULL, bool sign = true, AvailableCoinsType nCoinType = ALL_COINS, bool fUseInstantSend = false, bool fIsBDAP = false);
     bool CommitTransaction(CWalletTx& wtxNew, CReserveKey& reservekey, CConnman* connman, CValidationState& state, const std::string& strCommand = "tx");
 
     bool CreateCollateralTransaction(CMutableTransaction& txCollateral, std::string& strReason);

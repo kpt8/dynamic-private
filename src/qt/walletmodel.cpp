@@ -18,6 +18,7 @@
 #include "instantsend.h"
 #include "keystore.h"
 #include "key_io.h"
+#include "key/stealth.h"
 #include "net.h" // for g_connman
 #include "privatesend-client.h"
 #include "spork.h"
@@ -218,6 +219,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
     bool fSubtractFeeFromAmount = false;
     QList<SendCoinsRecipient> recipients = transaction.getRecipients();
     std::vector<CRecipient> vecSend;
+    std::vector<CRecipientData> vecSendData;
 
     if (recipients.empty()) {
         return OK;
@@ -264,10 +266,32 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
             setAddress.insert(rcp.address);
             ++nAddresses;
 
-            CScript scriptPubKey = GetScriptForDestination(CDynamicAddress(rcp.address.toStdString()).Get());
+            CScript scriptPubKey;
+            std::vector<uint8_t> vStealthData;
+            bool fStealthAddress = false;
+            CDynamicAddress address(rcp.address.toStdString());
+            CTxDestination dest = address.Get();
+            if (dest.type() == typeid(CStealthAddress))
+            {
+                // TODO (stealth): Add Narration textbox to QT GUI
+                std::string strNarr = "";
+                CStealthAddress sx = boost::get<CStealthAddress>(dest);
+                std::string sError;
+                if (0 != PrepareStealthOutput(sx, strNarr, scriptPubKey, vStealthData, sError)) {
+                    LogPrintf("%s -- PrepareStealthOutput failed. Error = %s\n", __func__, sError);
+                    return InvalidAddress;
+                }
+                fStealthAddress = true;
+            } else
+            {
+                scriptPubKey = GetScriptForDestination(CDynamicAddress(rcp.address.toStdString()).Get());
+            }
             CRecipient recipient = {scriptPubKey, rcp.amount, rcp.fSubtractFeeFromAmount};
             vecSend.push_back(recipient);
-
+            if (fStealthAddress) {
+                CRecipientData sendData = {DO_STEALTH, vStealthData};
+                vecSendData.push_back(sendData);
+            }
             total += rcp.amount;
         }
     }
@@ -299,7 +323,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
             return TransactionCreationFailed;
         }
 
-        bool fCreated = wallet->CreateTransaction(vecSend, *newTx, *keyChange, nFeeRequired, nChangePosRet, strFailReason, coinControl, true, recipients[0].inputType, recipients[0].fUseInstantSend);
+        bool fCreated = wallet->CreateTransaction(vecSend, vecSendData, *newTx, *keyChange, nFeeRequired, nChangePosRet, strFailReason, coinControl, true, recipients[0].inputType, recipients[0].fUseInstantSend);
         transaction.setTransactionFee(nFeeRequired);
         if (fSubtractFeeFromAmount && fCreated)
             transaction.reassignAmounts(nChangePosRet);

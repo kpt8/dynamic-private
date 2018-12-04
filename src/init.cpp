@@ -355,6 +355,7 @@ void Shutdown()
 #endif
     globalVerifyHandle.reset();
     ECC_Stop();
+    ECC_Stop_Stealth();
     ECC_Ed25519_Stop();
     LogPrintf("%s: done\n", __func__);
 }
@@ -1299,6 +1300,7 @@ bool AppInitSanityChecks()
     RandomInit();
     // Initialize elliptic curve code
     ECC_Start();
+    ECC_Start_Stealth();
     ECC_Ed25519_Start();
     globalVerifyHandle.reset(new ECCVerifyHandle());
 

@@ -431,8 +431,9 @@ int PrepareStealthOutput(const CStealthAddress &sx, const std::string &sNarratio
 
     uint32_t nStealthPrefix;
     if (0 != MakeStealthData(sNarration, sx.prefix, sShared, pkEphem, vData, nStealthPrefix, sError)) {
-        return 1;
+        return errorN(1, sError, __func__, "Could not generate stealth data.");
     }
+
     return 0;
 };
 

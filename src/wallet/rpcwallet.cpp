@@ -323,7 +323,8 @@ UniValue getaddressesbyaccount(const JSONRPCRequest& request)
     return ret;
 }
 
-static void SendMoney(const CTxDestination& address, CAmount nValue, bool fSubtractFeeFromAmount, CWalletTx& wtxNew, bool fUseInstantSend = false, bool fUsePrivateSend = false)
+static void SendMoney(const CTxDestination& address, CAmount nValue, bool fSubtractFeeFromAmount, CWalletTx& wtxNew, 
+            std::string strNarr, bool fUseInstantSend = false, bool fUsePrivateSend = false)
 {
     CAmount curBalance = pwalletMain->GetBalance();
 
@@ -337,18 +338,37 @@ static void SendMoney(const CTxDestination& address, CAmount nValue, bool fSubtr
     if (pwalletMain->GetBroadcastTransactions() && !g_connman)
         throw JSONRPCError(RPC_CLIENT_P2P_DISABLED, "Error: Peer-to-peer functionality missing or disabled");
 
-    // Parse Dynamic address
-    CScript scriptPubKey = GetScriptForDestination(address);
+    CScript scriptPubKey;
+    std::vector<uint8_t> vStealthData;
+    bool fStealthAddress = false;
+    if (address.type() == typeid(CStealthAddress))
+    {
+        CStealthAddress sx = boost::get<CStealthAddress>(address);
+        std::string sError;
+        if (0 != PrepareStealthOutput(sx, strNarr, scriptPubKey, vStealthData, sError)) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, std::string("SendMoney failed after PrepareStealthOutput(): ") + sError);
+        }
+        fStealthAddress = true;
+    } else
+    {
+        // Parse Dynamic address
+        scriptPubKey = GetScriptForDestination(address);
+    }
 
     // Create and send the transaction
     CReserveKey reservekey(pwalletMain);
     CAmount nFeeRequired;
     std::string strError;
     std::vector<CRecipient> vecSend;
+    std::vector<CRecipientData> vecSendData;
     int nChangePosRet = -1;
     CRecipient recipient = {scriptPubKey, nValue, fSubtractFeeFromAmount};
     vecSend.push_back(recipient);
-    if (!pwalletMain->CreateTransaction(vecSend, wtxNew, reservekey, nFeeRequired, nChangePosRet,
+    if (fStealthAddress) {
+        CRecipientData sendData = {DO_STEALTH, vStealthData};
+        vecSendData.push_back(sendData);
+    }
+    if (!pwalletMain->CreateTransaction(vecSend, vecSendData, wtxNew, reservekey, nFeeRequired, nChangePosRet,
             strError, NULL, true, fUsePrivateSend ? ONLY_DENOMINATED : ALL_COINS, fUseInstantSend)) {
         if (!fSubtractFeeFromAmount && nValue + nFeeRequired > curBalance)
             strError = strprintf("Error: This transaction requires a transaction fee of at least %s", FormatMoney(nFeeRequired));
@@ -443,7 +463,7 @@ UniValue sendtoaddress(const JSONRPCRequest& request)
     if (!EnsureWalletIsAvailable(request.fHelp))
         return NullUniValue;
 
-    if (request.fHelp || request.params.size() < 2 || request.params.size() > 7)
+    if (request.fHelp || request.params.size() < 2 || request.params.size() > 8)
         throw std::runtime_error(
             "sendtoaddress \"dynamicaddress\" amount ( \"comment\" \"comment-to\" subtractfeefromamount use_is use_ps )\n"
             "\nSend an amount to a given address.\n" +
@@ -459,8 +479,10 @@ UniValue sendtoaddress(const JSONRPCRequest& request)
                             "                             transaction, just kept in your wallet.\n"
                             "5. subtractfeefromamount  (boolean, optional, default=false) The fee will be deducted from the amount being sent.\n"
                             "                             The recipient will receive less Dynamic than you enter in the amount field.\n"
-                            "6. \"use_is\"      (bool, optional) Send this transaction as InstantSend (default: false)\n"
-                            "7. \"use_ps\"      (bool, optional) Use anonymized funds only (default: false)\n"
+                            "6. \"narration\"   (string, optional) Up to 24 characters sent with the transaction.\n"
+                            "                             The narration is stored in the blockchain and is sent encrypted when destination is a stealth address and unencrypted otherwise.\n"
+                            "7. \"use_is\"      (bool, optional) Send this transaction as InstantSend (default: false)\n"
+                            "8. \"use_ps\"      (bool, optional) Use anonymized funds only (default: false)\n"
                             "\nResult:\n"
                             "\"transactionid\"  (string) The transaction id.\n"
                             "\nExamples:\n" +
@@ -469,9 +491,9 @@ UniValue sendtoaddress(const JSONRPCRequest& request)
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
     CDynamicAddress address(request.params[0].get_str());
-    if (!address.IsValid())
+    if (!address.IsValid() && !address.IsValidStealthAddress())
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Dynamic address");
-
+    
     // Amount
     CAmount nAmount = AmountFromValue(request.params[1]);
     if (nAmount <= 0)
@@ -488,16 +510,20 @@ UniValue sendtoaddress(const JSONRPCRequest& request)
     if (request.params.size() > 4)
         fSubtractFeeFromAmount = request.params[4].get_bool();
 
+    std::string strNarr;
+    if (request.params.size() > 5)
+        strNarr = request.params[5].get_str();
+
     bool fUseInstantSend = false;
     bool fUsePrivateSend = false;
-    if (request.params.size() > 5)
-        fUseInstantSend = request.params[5].get_bool();
     if (request.params.size() > 6)
-        fUsePrivateSend = request.params[6].get_bool();
+        fUseInstantSend = request.params[6].get_bool();
+    if (request.params.size() > 7)
+        fUsePrivateSend = request.params[7].get_bool();
 
     EnsureWalletIsUnlocked();
 
-    SendMoney(address.Get(), nAmount, fSubtractFeeFromAmount, wtx, fUseInstantSend, fUsePrivateSend);
+    SendMoney(address.Get(), nAmount, fSubtractFeeFromAmount, wtx, strNarr, fUseInstantSend, fUsePrivateSend);
 
     return wtx.GetHash().GetHex();
 }
@@ -507,7 +533,7 @@ UniValue instantsendtoaddress(const JSONRPCRequest& request)
     if (!EnsureWalletIsAvailable(request.fHelp))
         return NullUniValue;
 
-    if (request.fHelp || request.params.size() < 2 || request.params.size() > 5)
+    if (request.fHelp || request.params.size() < 2 || request.params.size() > 6)
         throw std::runtime_error(
             "instantsendtoaddress \"dynamicaddress\" amount ( \"comment\" \"comment-to\" subtractfeefromamount )\n"
             "\nSend an amount to a given address. The amount is a real and is rounded to the nearest 0.00000001\n" +
@@ -522,6 +548,8 @@ UniValue instantsendtoaddress(const JSONRPCRequest& request)
             "                             transaction, just kept in your wallet.\n"
             "5. subtractfeefromamount  (boolean, optional, default=false) The fee will be deducted from the amount being sent.\n"
             "                             The recipient will receive less Dynamic than you enter in the amount field.\n"
+            "6. \"narration\"   (string, optional) Up to 24 characters sent with the transaction.\n"
+            "                             The narration is stored in the blockchain and is sent encrypted when destination is a stealth address and unencrypted otherwise.\n"
             "\nResult:\n"
             "\"transactionid\"  (string) The transaction id.\n"
             "\nExamples:\n" +
@@ -530,7 +558,7 @@ UniValue instantsendtoaddress(const JSONRPCRequest& request)
     LOCK2(cs_main, pwalletMain->cs_wallet);
 
     CDynamicAddress address(request.params[0].get_str());
-    if (!address.IsValid())
+    if (!address.IsValid() && !address.IsValidStealthAddress())
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Dynamic address");
 
     // Amount
@@ -549,9 +577,13 @@ UniValue instantsendtoaddress(const JSONRPCRequest& request)
     if (request.params.size() > 4)
         fSubtractFeeFromAmount = request.params[4].get_bool();
 
+    std::string strNarr;
+    if (request.params.size() > 5)
+        strNarr = request.params[5].get_str();
+
     EnsureWalletIsUnlocked();
 
-    SendMoney(address.Get(), nAmount, fSubtractFeeFromAmount, wtx, true);
+    SendMoney(address.Get(), nAmount, fSubtractFeeFromAmount, wtx, strNarr, true);
 
     return wtx.GetHash().GetHex();
 }
@@ -946,7 +978,7 @@ UniValue sendfrom(const JSONRPCRequest& request)
     if (!EnsureWalletIsAvailable(request.fHelp))
         return NullUniValue;
 
-    if (request.fHelp || request.params.size() < 3 || request.params.size() > 7)
+    if (request.fHelp || request.params.size() < 3 || request.params.size() > 8)
         throw std::runtime_error(
             "sendfrom \"fromaccount\" \"todynamicaddress\" amount ( minconf addlockconf \"comment\" \"comment-to\" )\n"
             "\nDEPRECATED (use sendtoaddress). Sent an amount from an account to a dynamic address." +
@@ -964,6 +996,8 @@ UniValue sendfrom(const JSONRPCRequest& request)
                                                 "7. \"comment-to\"     (string, optional) An optional comment to store the name of the person or organization \n"
                                                 "                                     to which you're sending the transaction. This is not part of the transaction, \n"
                                                 "                                     it is just kept in your wallet.\n"
+                                                "8. \"narration\"   (string, optional) Up to 24 characters sent with the transaction.\n"
+                                                "                             The narration is stored in the blockchain and is sent encrypted when destination is a stealth address and unencrypted otherwise.\n"
                                                 "\nResult:\n"
                                                 "\"transactionid\"     (string) The transaction id.\n"
                                                 "\nExamples:\n"
@@ -976,8 +1010,9 @@ UniValue sendfrom(const JSONRPCRequest& request)
 
     std::string strAccount = AccountFromValue(request.params[0]);
     CDynamicAddress address(request.params[1].get_str());
-    if (!address.IsValid())
+    if (!address.IsValid() && !address.IsValidStealthAddress())
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Dynamic address");
+
     CAmount nAmount = AmountFromValue(request.params[2]);
     if (nAmount <= 0)
         throw JSONRPCError(RPC_TYPE_ERROR, "Invalid amount for send");
@@ -993,6 +1028,10 @@ UniValue sendfrom(const JSONRPCRequest& request)
     if (request.params.size() > 6 && !request.params[6].isNull() && !request.params[6].get_str().empty())
         wtx.mapValue["to"] = request.params[6].get_str();
 
+    std::string strNarr;
+    if (request.params.size() > 7)
+        strNarr = request.params[7].get_str();
+
     EnsureWalletIsUnlocked();
 
     // Check funds
@@ -1000,7 +1039,7 @@ UniValue sendfrom(const JSONRPCRequest& request)
     if (nAmount > nBalance)
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, "Account has insufficient funds");
 
-    SendMoney(address.Get(), nAmount, false, wtx);
+    SendMoney(address.Get(), nAmount, false, wtx, strNarr);
 
     return wtx.GetHash().GetHex();
 }
