@@ -270,12 +270,11 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
             std::vector<uint8_t> vStealthData;
             bool fStealthAddress = false;
             CDynamicAddress address(rcp.address.toStdString());
-            CTxDestination dest = address.Get();
-            if (dest.type() == typeid(CStealthAddress))
+            if (address.Get().type() == typeid(CStealthAddress))
             {
                 // TODO (stealth): Add Narration textbox to QT GUI
                 std::string strNarr = "";
-                CStealthAddress sx = boost::get<CStealthAddress>(dest);
+                CStealthAddress sx = boost::get<CStealthAddress>(address.Get());
                 std::string sError;
                 if (0 != PrepareStealthOutput(sx, strNarr, scriptPubKey, vStealthData, sError)) {
                     LogPrintf("%s -- PrepareStealthOutput failed. Error = %s\n", __func__, sError);

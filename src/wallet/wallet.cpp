@@ -2938,12 +2938,33 @@ struct CompareByPriority {
 bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const std::set<int>& setSubtractFeeFromOutputs, bool keepReserveKey, const CTxDestination& destChange)
 {
     std::vector<CRecipient> vecSend;
+    std::vector<CRecipientData> vecSendData;
 
     // Turn the txout set into a CRecipient vector
     for (size_t idx = 0; idx < tx.vout.size(); idx++) {
         const CTxOut& txOut = tx.vout[idx];
-        CRecipient recipient = {txOut.scriptPubKey, txOut.nValue, setSubtractFeeFromOutputs.count(idx) == 1};
-        vecSend.push_back(recipient);
+        CTxDestination dest;
+        ExtractDestination(txOut.scriptPubKey, dest);
+        if (dest.type() == typeid(CStealthAddress)) {
+            CScript scriptPubKey;
+            std::vector<uint8_t> vStealthData;
+            std::string strNarr = "";
+            CStealthAddress sx = boost::get<CStealthAddress>(dest);
+            std::string sError;
+            if (0 != PrepareStealthOutput(sx, strNarr, scriptPubKey, vStealthData, sError)) {
+                LogPrintf("%s -- PrepareStealthOutput failed. Error = %s\n", __func__, sError);
+                return false;
+            }
+            CRecipient recipient = {scriptPubKey, txOut.nValue, setSubtractFeeFromOutputs.count(idx) == 1};
+            vecSend.push_back(recipient);
+            CRecipientData sendData = {DO_STEALTH, vStealthData};
+            vecSendData.push_back(sendData);
+        }
+        else 
+        {
+            CRecipient recipient = {txOut.scriptPubKey, txOut.nValue, setSubtractFeeFromOutputs.count(idx) == 1};
+            vecSend.push_back(recipient);
+        }
     }
 
     CCoinControl coinControl;
@@ -2958,7 +2979,7 @@ bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool ov
 
     CReserveKey reservekey(this);
     CWalletTx wtx;
-    if (!CreateTransaction(vecSend, wtx, reservekey, nFeeRet, nChangePosInOut, strFailReason, &coinControl, false))
+    if (!CreateTransaction(vecSend, vecSendData, wtx, reservekey, nFeeRet, nChangePosInOut, strFailReason, &coinControl, false))
         return false;
 
     if (nChangePosInOut != -1)
@@ -3585,7 +3606,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, const st
                     // Create OP_RETURN script for stealth transactions
                     CScript scriptData;
                     scriptData << OP_RETURN << data.vData;
-                    CTxOut txout(DEFAULT_MIN_RELAY_TX_FEE, scriptData);
+                    CTxOut txout(0, scriptData);
                     txNew.vout.push_back(txout);
                 }
                 // Choose coins to use

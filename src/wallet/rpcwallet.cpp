@@ -1050,7 +1050,7 @@ UniValue sendmany(const JSONRPCRequest& request)
     if (!EnsureWalletIsAvailable(request.fHelp))
         return NullUniValue;
 
-    if (request.fHelp || request.params.size() < 2 || request.params.size() > 8)
+    if (request.fHelp || request.params.size() < 2 || request.params.size() > 9)
         throw std::runtime_error(
             "sendmany \"fromaccount\" {\"address\":amount,...} ( minconf addlockconf \"comment\" [\"address\",...] subtractfeefromamount use_is use_ps )\n"
             "\nSend multiple times. Amounts are double-precision floating point numbers." +
@@ -1109,19 +1109,37 @@ UniValue sendmany(const JSONRPCRequest& request)
 
     std::set<CDynamicAddress> setAddress;
     std::vector<CRecipient> vecSend;
+    std::vector<CRecipientData> vecSendData;
 
     CAmount totalAmount = 0;
     std::vector<std::string> keys = sendTo.getKeys();
-    BOOST_FOREACH (const std::string& name_, keys) {
+    for (const std::string& name_ : keys) {
+
+        std::vector<uint8_t> vStealthData;
+        bool fStealthAddress = false;
         CDynamicAddress address(name_);
-        if (!address.IsValid())
+        if (!address.IsValid() && !address.IsValidStealthAddress())
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, std::string("Invalid Dynamic address: ") + name_);
 
         if (setAddress.count(address))
             throw JSONRPCError(RPC_INVALID_PARAMETER, std::string("Invalid parameter, duplicated address: ") + name_);
         setAddress.insert(address);
 
-        CScript scriptPubKey = GetScriptForDestination(address.Get());
+        CScript scriptPubKey;
+        if (address.Get().type() == typeid(CStealthAddress))
+        {
+            // TODO (stealth): Add narration to sendmany
+            std::string strNarr = "";
+            CStealthAddress sx = boost::get<CStealthAddress>(address.Get());
+            std::string sError;
+            if (0 != PrepareStealthOutput(sx, strNarr, scriptPubKey, vStealthData, sError)) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, std::string("PrepareStealthOutput failed for address =") + name_ + ". Error: " + sError);
+            }
+            fStealthAddress = true;
+        } else
+        {
+            scriptPubKey = GetScriptForDestination(address.Get());
+        }
         CAmount nAmount = AmountFromValue(sendTo[name_]);
         if (nAmount <= 0)
             throw JSONRPCError(RPC_TYPE_ERROR, "Invalid amount for send");
@@ -1136,6 +1154,10 @@ UniValue sendmany(const JSONRPCRequest& request)
 
         CRecipient recipient = {scriptPubKey, nAmount, fSubtractFeeFromAmount};
         vecSend.push_back(recipient);
+        if (fStealthAddress) {
+            CRecipientData sendData = {DO_STEALTH, vStealthData};
+            vecSendData.push_back(sendData);
+        }
     }
 
     EnsureWalletIsUnlocked();
@@ -1157,7 +1179,7 @@ UniValue sendmany(const JSONRPCRequest& request)
     if (request.params.size() > 7)
         fUsePrivateSend = request.params[7].get_bool();
 
-    bool fCreated = pwalletMain->CreateTransaction(vecSend, wtx, keyChange, nFeeRequired, nChangePosRet, strFailReason,
+    bool fCreated = pwalletMain->CreateTransaction(vecSend, vecSendData, wtx, keyChange, nFeeRequired, nChangePosRet, strFailReason,
         NULL, true, fUsePrivateSend ? ONLY_DENOMINATED : ALL_COINS, fUseInstantSend);
     if (!fCreated)
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, strFailReason);

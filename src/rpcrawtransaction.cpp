@@ -13,6 +13,7 @@
 #include "instantsend.h"
 #include "keystore.h"
 #include "key_io.h"
+#include "key/stealth.h"
 #include "merkleblock.h"
 #include "net.h"
 #include "policy/policy.h"
@@ -438,26 +439,47 @@ UniValue createrawtransaction(const JSONRPCRequest& request)
 
     std::set<CDynamicAddress> setAddress;
     std::vector<std::string> addrList = sendTo.getKeys();
-    BOOST_FOREACH (const std::string& name_, addrList) {
+    for (const std::string& name_ : addrList) {
         if (name_ == "data") {
             std::vector<unsigned char> data = ParseHexV(sendTo[name_].getValStr(), "Data");
 
             CTxOut out(0, CScript() << OP_RETURN << data);
             rawTx.vout.push_back(out);
         } else {
-            CDynamicAddress address(name_);
-            if (!address.IsValid())
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, std::string("Invalid Dynamic address: ") + name_);
 
+            CScript scriptPubKey;
+            std::vector<uint8_t> vStealthData;
+            bool fStealthAddress = false;
+            CDynamicAddress address(name_);
+            if (!address.IsValid() && !address.IsValidStealthAddress())
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, std::string("Invalid Dynamic address: ") + name_);
             if (setAddress.count(address))
                 throw JSONRPCError(RPC_INVALID_PARAMETER, std::string("Invalid parameter, duplicated address: ") + name_);
+
+            if (address.Get().type() == typeid(CStealthAddress))
+            {
+                // TODO (stealth): Add narration to getrawtransaction
+                std::string strNarr = "";
+                CStealthAddress sx = boost::get<CStealthAddress>(address.Get());
+                std::string sError;
+                if (0 != PrepareStealthOutput(sx, strNarr, scriptPubKey, vStealthData, sError)) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, std::string("PrepareStealthOutput failed for address =") + name_ + ". Error: " + sError);
+                }
+                fStealthAddress = true;
+            } else
+            {
+                scriptPubKey = GetScriptForDestination(address.Get());
+            }
             setAddress.insert(address);
-
-            CScript scriptPubKey = GetScriptForDestination(address.Get());
             CAmount nAmount = AmountFromValue(sendTo[name_]);
-
             CTxOut out(nAmount, scriptPubKey);
             rawTx.vout.push_back(out);
+            if (fStealthAddress) {
+                CScript scriptData;
+                scriptData << OP_RETURN << vStealthData;
+                CTxOut txOutData(0, scriptData);
+                rawTx.vout.push_back(txOutData);
+            }
         }
     }
 
