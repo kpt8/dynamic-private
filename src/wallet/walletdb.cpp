@@ -1116,3 +1116,63 @@ bool CWalletDB::WriteExtStealthKeyPack(const CKeyID& identifier, const uint32_t 
 {
     return Write(PackKey("espk", identifier, nPack), aksPak);
 };
+
+bool CWalletDB::WriteStealthKeyMeta(const CKeyID& keyId, const CStealthKeyMetadata& sxKeyMeta)
+{
+    return Write(std::make_pair(std::string("sxkm"), keyId), sxKeyMeta);
+};
+
+bool CWalletDB::EraseStealthKeyMeta(const CKeyID& keyId)
+{
+    return Erase(std::make_pair(std::string("sxkm"), keyId));
+};
+
+bool CWalletDB::ReadStealthAddressIndex(uint32_t id, CStealthAddressIndexed& sxi)
+{
+    return Read(std::make_pair(std::string("ins"), id), sxi);
+};
+
+bool CWalletDB::WriteStealthAddressIndex(const uint32_t id, const CStealthAddressIndexed& sxi)
+{
+    return Write(std::make_pair(std::string("ins"), id), sxi);
+};
+
+bool CWalletDB::ReadStealthAddressIndexReverse(const uint160& hash, uint32_t& id)
+{
+    return Read(std::make_pair(std::string("ris"), hash), id);
+};
+
+bool CWalletDB::WriteStealthAddressIndexReverse(const uint160& hash, const uint32_t id)
+{
+    return Write(std::make_pair(std::string("ris"), hash), id);
+};
+
+bool CWalletDB::ReadStealthAddressLink(const CKeyID& keyId, uint32_t& id)
+{
+    return Read(std::make_pair(std::string("lns"), keyId), id);
+};
+
+bool CWalletDB::WriteStealthAddressLink(const CKeyID& keyId, const uint32_t id)
+{
+    return Write(std::make_pair(std::string("lns"), keyId), id);
+};
+
+bool CWalletDB::ReadExtStealthKeyChildPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKASCKeyPack>& asckPak)
+{
+    return Read(PackKey("ecpk", identifier, nPack), asckPak);
+};
+
+bool CWalletDB::WriteExtStealthKeyChildPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKASCKeyPack>& asckPak)
+{
+    return Write(PackKey("ecpk", identifier, nPack), asckPak);
+};
+
+bool CWalletDB::ReadExtKeyPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKAKeyPack>& ekPak)
+{
+    return Read(PackKey("epak", identifier, nPack), ekPak);
+};
+
+bool CWalletDB::WriteExtKeyPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKAKeyPack>& ekPak)
+{
+    return Write(PackKey("epak", identifier, nPack), ekPak);
+};

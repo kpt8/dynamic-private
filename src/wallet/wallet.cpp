@@ -13,6 +13,7 @@
 #include "checkpoints.h"
 #include "consensus/consensus.h"
 #include "consensus/validation.h"
+#include "crypto/crypter.h"
 #include "fluid/fluid.h"
 #include "governance.h"
 #include "init.h"
@@ -1227,11 +1228,12 @@ bool CWallet::LoadToWallet(const CWalletTx& wtxIn)
  */
 bool CWallet::AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlockIndex* pIndex, int posInBlock, bool fUpdate)
 {
+    LogPrintf("%s -- tx = %s\n", __func__, tx.ToString());
     {
         AssertLockHeld(cs_wallet);
 
         if (posInBlock != -1) {
-            BOOST_FOREACH (const CTxIn& txin, tx.vin) {
+            for (const CTxIn& txin : tx.vin) {
                 std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range = mapTxSpends.equal_range(txin.prevout);
                 while (range.first != range.second) {
                     if (range.first->second != tx.GetHash()) {
@@ -1242,11 +1244,15 @@ bool CWallet::AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlockIndex
                 }
             }
         }
-
+        
         bool fExisted = mapWallet.count(tx.GetHash()) != 0;
         if (fExisted && !fUpdate)
             return false;
-        if (fExisted || IsMine(tx) || IsFromMe(tx)) {
+
+        mapValue_t mapNarr;
+        bool fIsMyStealth = ScanForOwnedOutputs(tx, mapNarr);
+
+        if (fExisted || IsMine(tx) || IsFromMe(tx) || fIsMyStealth) {
             CWalletTx wtx(this, MakeTransactionRef(tx));
 
             // Get merkle branch if transaction was found in a block
@@ -5496,7 +5502,7 @@ int CWallet::ExtKeyImportLoose(CStoredExtKey& sekIn, CKeyID& idDerived, bool fBi
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -5585,7 +5591,7 @@ int CWallet::ExtKeySetMaster(CKeyID& idNewMaster)
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -5815,7 +5821,7 @@ int CWallet::ExtKeySaveAccountToDB(const CKeyID& idAccount, CExtKeyAccount* sea)
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
     for (size_t i = 0; i < sea->vExtKeys.size(); ++i) {
@@ -5841,7 +5847,7 @@ int CWallet::ExtKeyDeriveNewAccount(CExtKeyAccount* sea, const std::string& sLab
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
     assert(sea);
@@ -5939,7 +5945,7 @@ int CWallet::ExtKeySetDefaultAccount(CKeyID& idNewDefault)
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -6028,7 +6034,7 @@ int CWallet::MakeDefaultAccount()
     }
     else {
         LogPrintf("%s -- strWalletFile = %s.\n", __func__, strWalletFile);
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -6093,7 +6099,7 @@ int CWallet::ExtKeyNewIndex(const CKeyID& idKey, uint32_t& index)
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -6145,7 +6151,7 @@ int CWallet::ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index)
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -6177,7 +6183,7 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
@@ -6286,136 +6292,557 @@ int CWallet::NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBit
     return 0;
 };
 
-int CWallet::ExtKeyGetDestination(const CExtKeyPair& ek, CPubKey& pkDest, uint32_t& nKey)
+int CWallet::ExtKeyAppendToPack(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& idKey, const CEKAKey& ak, bool& fUpdateAcc) const
 {
-    if (LogAcceptCategory("hdwallet")) {
-        CExtKey58 ek58;
-        ek58.SetKeyP(ek);
-        LogPrintf("%s: %s.\n", __func__, ek58.ToString());
-        AssertLockHeld(cs_wallet);
+    // Must scall WriteExtAccount after
+
+    CKeyID idAccount = sea->GetID();
+    std::vector<CEKAKeyPack> ekPak;
+    if (!pwdb->ReadExtKeyPack(idAccount, sea->nPack, ekPak)) {
+        // New pack
+        ekPak.clear();
+        LogPrint("hdwallet", "Account %s, starting new keypack %u.\n", idAccount.ToString(), sea->nPack);
     }
 
-    /*
-    Get the next destination,
-    if key is not saved yet, return 1st key
-    don't save key here, save after derived key has been successfully used
-    */
+    try { ekPak.push_back(CEKAKeyPack(idKey, ak)); } catch (std::exception& e) {
+        return errorN(1, "%s push_back failed.", __func__);
+    }
 
-    CKeyID keyId = ek.GetID();
+    if (!pwdb->WriteExtKeyPack(idAccount, sea->nPack, ekPak)) {
+        return errorN(1, "%s Save key pack %u failed.", __func__, sea->nPack);
+    }
+
+    fUpdateAcc = false;
+    if ((uint32_t)ekPak.size() >= MAX_KEY_PACK_SIZE-1) {
+        fUpdateAcc = true;
+        sea->nPack++;
+    }
+    return 0;
+};
+
+int CWallet::ExtKeyAppendToPack(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& idKey, const CEKASCKey& asck, bool& fUpdateAcc) const
+{
+    // Must call WriteExtAccount after
+
+    CKeyID idAccount = sea->GetID();
+    std::vector<CEKASCKeyPack> asckPak;
+    if (!pwdb->ReadExtStealthKeyChildPack(idAccount, sea->nPackStealthKeys, asckPak)) {
+        // New pack
+        asckPak.clear();
+        LogPrint("hdwallet", "Account %s, starting new stealth child keypack %u.\n", idAccount.ToString(), sea->nPackStealthKeys);
+    }
+
+    try { asckPak.push_back(CEKASCKeyPack(idKey, asck)); } catch (std::exception& e) {
+        return errorN(1, "%s push_back failed.", __func__);
+    }
+
+    if (!pwdb->WriteExtStealthKeyChildPack(idAccount, sea->nPackStealthKeys, asckPak)) {
+        return errorN(1, "%s Save key pack %u failed.", __func__, sea->nPackStealthKeys);
+    }
+
+    fUpdateAcc = false;
+    if ((uint32_t)asckPak.size() >= MAX_KEY_PACK_SIZE-1) {
+        sea->nPackStealthKeys++;
+        fUpdateAcc = true;
+    }
+
+    return 0;
+};
+
+int CWallet::ExtKeySaveKey(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& keyId, const CEKASCKey& asck) const
+{
+    LogPrint("hdwallet", "%s: %s %s.\n", __func__, sea->GetIDString58(), CDynamicAddress(keyId).ToString());
+    AssertLockHeld(cs_wallet);
+
+    if (!sea->SaveKey(keyId, asck)) {
+        return errorN(1, "%s SaveKey failed.", __func__);
+    }
+
+    bool fUpdateAcc;
+    if (0 != ExtKeyAppendToPack(pwdb, sea, keyId, asck, fUpdateAcc)) {
+        return errorN(1, "%s ExtKeyAppendToPack failed.", __func__);
+    }
+
+    if (fUpdateAcc) { // only necessary if nPackStealth has changed
+        CKeyID idAccount = sea->GetID();
+        if (!pwdb->WriteExtAccount(idAccount, *sea)) {
+            return errorN(1, "%s WriteExtAccount failed.", __func__);
+        }
+    }
+
+    return 0;
+};
+
+bool CWallet::IndexStealthKey(CWalletDB* pwdb, uint160& hash, const CStealthAddressIndexed& sxi, uint32_t& id)
+{
+    AssertLockHeld(cs_wallet);
+    LogPrint("hdwallet", "%s: Indexing new stealth key.\n", __func__);
+
+    uint32_t lastId = 0xFFFFFFFF;
+    id = 0;
+
+    if (!pwdb->ReadFlag("sxLastI", (int32_t&)id)) {
+        LogPrintf("Warning: %s - ReadFlag sxLastI failed.\n", __func__);
+    }
+
+    id++;
+
+    if (id == lastId) {
+        return error("%s: Wallet stealth index is full!", __func__); // expect multiple wallets per node before anyone hits this
+    }
+
+    LogPrint("hdwallet", "%s: New index %u.\n", __func__, id);
+    
+    if (!pwdb->WriteStealthAddressIndex(id, sxi) || !pwdb->WriteStealthAddressIndexReverse(hash, id) || !pwdb->WriteFlag("sxLastI", (int32_t&)id)) {
+        return error("%s: Write failed.", __func__);
+    }
+
+    return true;
+};
+
+bool CWallet::UpdateStealthAddressIndex(const CKeyID& idK, const CStealthAddressIndexed& sxi, uint32_t& id)
+{
+    LOCK(cs_wallet);
+
+    uint160 hash = Hash160(sxi.addrRaw.begin(), sxi.addrRaw.end());
+
     CWalletDB* pwdb;
     if (IsCrypted()) {
         pwdb = pwalletdbEncryption;
     }
     else {
-        pwdb = new CWalletDB(strWalletFile, "cr+");
+        pwdb = new CWalletDB(strWalletFile, "r+");
     }
     assert(pwdb);
 
-    CStoredExtKey sek;
-    if (pwdb->ReadExtKey(keyId, sek)) {
-        if (0 != sek.DeriveNextKey(pkDest, nKey)) {
-            return errorN(1, "%s -- DeriveNextKey failed.\n", __func__);
+    if (pwdb->ReadStealthAddressIndexReverse(hash, id)) {
+        if (!pwdb->WriteStealthAddressLink(idK, id)) {
+            return error("%s: WriteStealthAddressLink failed.\n", __func__);
         }
-        return 0;
-    } else {
-        nKey = 0; // AddLookAhead starts from 0
-        for (uint32_t i = 0; i < MAX_DERIVE_TRIES; ++i) {
-            if (ek.Derive(pkDest, nKey)) {
-                return 0;
-            }
-            nKey++;
-        }
+        return true;
     }
-    return errorN(1, "%s -- Could not derive key.\n", __func__);
+
+    if (!IndexStealthKey(pwdb, hash, sxi, id)) {
+        return error("%s: IndexStealthKey failed.\n", __func__);
+    }
+
+    if (!pwdb->WriteStealthAddressLink(idK, id)) {
+        return error("%s: Write failed.\n", __func__);
+    }
+
+    return true;
 };
 
-int CWallet::ExpandStealthRecipients(std::vector<CTempRecipient>& vecSend, CStoredExtKey* pc, std::string& sError)
+bool CWallet::GetStealthAddressScanKey(CStealthAddress& sxAddr) const
 {
-    LOCK(cs_wallet);
-    //uint32_t nChild;
-    for (size_t i = 0; i < vecSend.size(); ++i) {
-        CTempRecipient &r = vecSend[i];
+    std::set<CStealthAddress>::const_iterator si = stealthAddresses.find(sxAddr);
+    if (si != stealthAddresses.end()) {
+        sxAddr.scan_secret = si->scan_secret;
+        return true;
+    }
 
-        if (r.nType == OUTPUT_STANDARD) {
-            if (r.address.type() == typeid(CStealthAddress)) {
-                CStealthAddress sx = boost::get<CStealthAddress>(r.address);
+    CKeyID sxId = CPubKey(sxAddr.scan_pubkey).GetID();
 
-                CKey sShared;
-                ec_point pkSendTo;
+    ExtKeyAccountMap::const_iterator mi;
+    for (mi = mapExtAccounts.begin(); mi != mapExtAccounts.end(); ++mi) {
+        CExtKeyAccount *ea = mi->second;
 
-                int k, nTries = 24;
-                for (k = 0; k < nTries; ++k) { // if StealthSecret fails try again with new ephem key
-                    r.sEphem.MakeNewKey(true);
-                    if (StealthSecret(r.sEphem, sx.scan_pubkey, sx.spend_pubkey, sShared, pkSendTo) == 0) {
-                        break;
-                    }
-                }
-                if (k >= nTries) {
-                    return errorN(1, "%s -- Could not generate receiving public key.\n", __func__);
-                }
+        if (ea->mapStealthKeys.size() < 1) {
+            continue;
+        }
 
-                CPubKey pkEphem = r.sEphem.GetPubKey();
-                r.pkTo = CPubKey(pkSendTo);
-                CKeyID idTo = r.pkTo.GetID();
-                r.scriptPubKey = GetScriptForDestination(idTo);
-                // save r.sEphem in local wallet.
-                CKey epthKey = r.sEphem;
-                if (!AddKeyPubKey(epthKey, r.pkTo)) {
-                    LogPrintf("Failed to save stealth sEphem key %s\n", CDynamicAddress(idTo).ToString());
-                }
-                else {
-                    LogPrintf("Added stealth sEphem key to local wallet. %s\n", CDynamicAddress(idTo).ToString());
-                }
-                LogPrint("hdwallet", "Stealth send to generated address: %s\n", CDynamicAddress(idTo).ToString());
-                
-                CTempRecipient rd;
-                rd.nType = OUTPUT_DATA;
-
-                if (0 != MakeStealthData(r.sNarration, sx.prefix, sShared, pkEphem, rd.vData, r.nStealthPrefix, sError)) {
-                    return 1;
-                }
-                vecSend.insert(vecSend.begin() + (i+1), rd);
-                i++; // skip over inserted output
-            } else {
-                if (r.address.type() == typeid(CExtKeyPair)) {
-                    CExtKeyPair ek = boost::get<CExtKeyPair>(r.address);
-                    CPubKey pkDest;
-                    uint32_t nChildKey;
-                    if (0 != ExtKeyGetDestination(ek, pkDest, nChildKey)) {
-                        return errorN(1, "%s -- ExtKeyGetDestination failed.\n", __func__);
-                    }
-
-                    r.nChildKey = nChildKey;
-                    r.pkTo = pkDest;
-                    r.scriptPubKey = GetScriptForDestination(pkDest.GetID());
-                } else
-                if (r.address.type() == typeid(CKeyID)) {
-                    r.scriptPubKey = GetScriptForDestination(r.address);
-                } else {
-                    if (!r.fScriptSet) {
-                        r.scriptPubKey = GetScriptForDestination(r.address);
-                        if (r.scriptPubKey.size() < 1) {
-                            return errorN(1, "%s -- Unknown address type and no script set.\n", __func__);
-                        }
-                    }
-                }
-
-                if (r.sNarration.length() > 0) {
-                    CTempRecipient rd;
-                    rd.nType = OUTPUT_DATA;
-
-                    std::vector<uint8_t> vNarr;
-                    rd.vData.push_back(DO_NARR_PLAIN);
-                    std::copy(r.sNarration.begin(), r.sNarration.end(), std::back_inserter(rd.vData));
-
-                    vecSend.insert(vecSend.begin() + (i+1), rd);
-                    i++; // skip over inserted output
-                }
-            }
+        AccStealthKeyMap::iterator it = ea->mapStealthKeys.find(sxId);
+        if (it != ea->mapStealthKeys.end()) {
+            sxAddr.scan_secret = it->second.skScan;
+            return true;
         }
     }
 
-    return 0;
+    return false;
+};
+
+bool CWallet::GetStealthLinked(const CKeyID& idK, CStealthAddress& sx)
+{
+    LOCK(cs_wallet);
+
+    CWalletDB* pwdb;
+    if (IsCrypted()) {
+        pwdb = pwalletdbEncryption;
+    }
+    else {
+        pwdb = new CWalletDB(strWalletFile, "r+");
+    }
+    assert(pwdb);
+
+    uint32_t sxId;
+    if (!pwdb->ReadStealthAddressLink(idK, sxId)) {
+        return false;
+    }
+
+    CStealthAddressIndexed sxi;
+    if (!pwdb->ReadStealthAddressIndex(sxId, sxi)) {
+        return false;
+    }
+
+    if (sxi.addrRaw.size() < MIN_STEALTH_RAW_SIZE) {
+        return error("%s: Incorrect size for stealthId: %u", __func__, sxId);
+    }
+
+    if (0 != sx.FromRaw(&sxi.addrRaw[0], sxi.addrRaw.size())) {
+        return error("%s: FromRaw failed for stealthId: %u", __func__, sxId);
+    }
+
+    return true;
+};
+
+inline bool MatchPrefix(uint32_t nAddrBits, uint32_t addrPrefix, uint32_t outputPrefix, bool fHavePrefix)
+{
+    if (nAddrBits < 1) { // addresses without prefixes scan all incoming stealth outputs
+        return true;
+    }
+    if (!fHavePrefix) { // don't check when address has a prefix and no prefix on output
+        return false;
+    }
+
+    uint32_t mask = SetStealthMask(nAddrBits);
+
+    return (addrPrefix & mask) == (outputPrefix & mask);
+};
+
+bool CWallet::ProcessStealthOutput(const CTxDestination& address, std::vector<uint8_t>& vchEphemPK, 
+                                    uint32_t prefix, bool fHavePrefix, CKey& sShared, bool fNeedShared)
+{
+    LOCK(cs_wallet);
+    ec_point pkExtracted;
+    CKey sSpend;
+
+    CWalletDB* pwdb;
+    if (IsCrypted()) {
+        pwdb = pwalletdbEncryption;
+    }
+    else {
+        pwdb = new CWalletDB(strWalletFile, "r+");
+    }
+    assert(pwdb);
+
+    CKeyID ckidMatch = boost::get<CKeyID>(address);
+    if (HaveKey(ckidMatch)) {
+        CStealthAddress sx;
+        if (fNeedShared && GetStealthLinked(ckidMatch, sx) && GetStealthAddressScanKey(sx)) {
+            if (StealthShared(sx.scan_secret, vchEphemPK, sShared) != 0) {
+                LogPrintf("%s: StealthShared failed.\n", __func__);
+                //continue;
+            }
+        }
+        return true;
+    }
+
+    std::set<CStealthAddress>::iterator it;
+    for (it = stealthAddresses.begin(); it != stealthAddresses.end(); ++it) {
+        if (!MatchPrefix(it->prefix.number_bits, it->prefix.bitfield, prefix, fHavePrefix)) {
+            continue;
+        }
+
+        if (!it->scan_secret.IsValid()) {
+            continue; // stealth address is not owned
+        }
+
+        if (StealthSecret(it->scan_secret, vchEphemPK, it->spend_pubkey, sShared, pkExtracted) != 0) {
+            LogPrintf("%s: StealthSecret failed.\n", __func__);
+            continue;
+        }
+
+        CPubKey pkE(pkExtracted);
+        if (!pkE.IsValid()) {
+            continue;
+        }
+
+        CKeyID idExtracted = pkE.GetID();
+        if (ckidMatch != idExtracted) {
+            continue;
+        }
+
+        LogPrint("hdwallet", "Found stealth txn to address %s\n", it->Encoded());
+
+        CStealthAddressIndexed sxi;
+        it->ToRaw(sxi.addrRaw);
+        uint32_t sxId;
+        if (!UpdateStealthAddressIndex(ckidMatch, sxi, sxId)) {
+            return error("%s: UpdateStealthAddressIndex failed.\n", __func__);
+        }
+
+        if (IsLocked()) {
+
+            LogPrint("hdwallet", "%s: Wallet locked, adding key without secret.\n", __func__);
+            // Add key without secret
+            std::vector<uint8_t> vchEmpty;
+            AddCryptedKey(pkE, vchEmpty);
+            CDynamicAddress coinAddress(idExtracted);
+
+            CPubKey cpkEphem(vchEphemPK);
+            CPubKey cpkScan(it->scan_pubkey);
+            CStealthKeyMetadata lockedSkMeta(cpkEphem, cpkScan);
+
+            if (!pwdb->WriteStealthKeyMeta(idExtracted, lockedSkMeta)) {
+                LogPrintf("%s: WriteStealthKeyMeta failed for %s.\n", __func__, coinAddress.ToString());
+            }
+
+            nFoundStealth++;
+            return true;
+        }
+
+        if (!GetKey(it->spend_secret_id, sSpend)) {
+            // silently fail?
+            LogPrint("hdwallet", "%s: GetKey() stealth spend failed.\n", __func__);
+            continue;
+        }
+
+        CKey sSpendR;
+        if (StealthSharedToSecretSpend(sShared, sSpend, sSpendR) != 0) {
+            LogPrintf("%s: StealthSharedToSecretSpend() failed.\n", __func__);
+            continue;
+        }
+
+        CPubKey pkT = sSpendR.GetPubKey();
+        if (!pkT.IsValid()) {
+            LogPrintf("%s: pkT is invalid.\n", __func__);
+            continue;
+        }
+
+        CKeyID keyID = pkT.GetID();
+        if (keyID != ckidMatch) {
+            LogPrintf("%s: Spend key mismatch!\n", __func__);
+            continue;
+        }
+
+        LogPrint("hdwallet", "%s: Adding key %s.\n", __func__, CDynamicAddress(keyID).ToString());
+        
+        if (!AddKeyPubKey(sSpendR, pkT)) {
+            LogPrintf("%s: AddKeyPubKey failed.\n", __func__);
+            continue;
+        }
+
+        nFoundStealth++;
+        return true;
+    };
+
+    // ext account stealth keys
+    ExtKeyAccountMap::const_iterator mi;
+    for (mi = mapExtAccounts.begin(); mi != mapExtAccounts.end(); ++mi) {
+        CExtKeyAccount *ea = mi->second;
+
+        for (AccStealthKeyMap::iterator it = ea->mapStealthKeys.begin(); it != ea->mapStealthKeys.end(); ++it) {
+            const CEKAStealthKey &aks = it->second;
+
+            if (!MatchPrefix(aks.nPrefixBits, aks.nPrefix, prefix, fHavePrefix)) {
+                continue;
+            }
+
+            if (!aks.skScan.IsValid()) {
+                continue;
+            }
+
+            if (StealthSecret(aks.skScan, vchEphemPK, aks.pkSpend, sShared, pkExtracted) != 0) {
+                LogPrintf("%s: StealthSecret failed.\n", __func__);
+                continue;
+            }
+
+            CPubKey pkE(pkExtracted);
+            if (!pkE.IsValid()) {
+                continue;
+            }
+
+            CKeyID idExtracted = pkE.GetID();
+            if (ckidMatch != idExtracted) {
+                continue;
+            }
+
+            if (LogAcceptCategory("hdwallet")) {
+                LogPrintf("Found stealth txn to address %s\n", aks.ToStealthAddress());
+
+                // Check key if not locked
+                if (!IsLocked() && !(ea->nFlags & EAF_HARDWARE_DEVICE)) {
+                    CKey kTest;
+                    if (0 != ea->ExpandStealthChildKey(&aks, sShared, kTest)) {
+                        LogPrintf("%s: Error: ExpandStealthChildKey failed! %s.\n", __func__, aks.ToStealthAddress());
+                        continue;
+                    }
+
+                    CKeyID kTestId = kTest.GetPubKey().GetID();
+                    if (kTestId != ckidMatch) {
+                        LogPrintf("%s: Error: Spend key mismatch!\n", __func__);
+                        continue;
+                    }
+                    CDynamicAddress coinAddress(kTestId);
+                    LogPrintf("Debug: ExpandStealthChildKey matches! %s, %s.\n", aks.ToStealthAddress(), coinAddress.ToString());
+                }
+            }
+
+            // Don't need to extract key now, wallet may be locked
+            CKeyID idStealthKey = aks.GetID();
+            CEKASCKey kNew(idStealthKey, sShared);
+            
+            if (0 != ExtKeySaveKey(pwdb, ea, ckidMatch, kNew)) {
+                LogPrintf("%s: Error: ExtKeySaveKey failed!\n", __func__);
+                continue;
+            }
+
+            CStealthAddressIndexed sxi;
+            aks.ToRaw(sxi.addrRaw);
+            uint32_t sxId;
+            if (!UpdateStealthAddressIndex(ckidMatch, sxi, sxId)) {
+                return error("%s: UpdateStealthAddressIndex failed.\n", __func__);
+            }
+
+            return true;
+        }
+    }
+
+    return false;
+};
+
+static bool IsDataScript(const CScript& data)
+{
+    CScript::const_iterator pc = data.begin();
+    opcodetype opcode;
+    if (!data.GetOp(pc, opcode))
+        return false;
+    if(opcode != OP_RETURN)
+        return false;
+    std::vector<uint8_t> vData;
+    if (!data.GetOp(pc, opcode, vData))
+        return false;
+    
+    return true;
+}
+
+static bool GetDataFromScript(const CScript& data, std::vector<uint8_t>& vData)
+{
+    CScript::const_iterator pc = data.begin();
+    opcodetype opcode;
+    if (!data.GetOp(pc, opcode))
+        return false;
+    if(opcode != OP_RETURN)
+        return false;
+    if (!data.GetOp(pc, opcode, vData))
+        return false;
+
+    return true;
+}
+
+int CWallet::CheckForStealthAndNarration(const CTxOut* pTxOut, std::string& sNarr)
+{
+    LogPrintf("%s -- txout = %s\n", __func__, pTxOut->ToString());
+    // returns: -1 error, 0 nothing found, 1 narration, 2 stealth
+    CKey sShared;
+    std::vector<uint8_t> vchEphemPK;
+    std::vector<uint8_t> vData;
+    if (!GetDataFromScript(pTxOut->scriptPubKey, vData))
+        return 0;
+    
+    if (vData.size() < 1) {
+        return -1;
+    }
+
+    if (vData[0] == DO_NARR_PLAIN) {
+        if (vData.size() < 2) {
+            return -1; // error
+        }
+
+        sNarr = std::string(vData.begin()+1, vData.end());
+        return 1;
+    }
+
+    if (vData[0] == DO_STEALTH) {
+        if (vData.size() < 34 ) {
+            return -1; // error
+        }
+
+        vchEphemPK.resize(33);
+        memcpy(&vchEphemPK[0], &vData[1], 33);
+
+        uint32_t prefix = 0;
+        bool fHavePrefix = false;
+
+        if (vData.size() >= 34 + 5 && vData[34] == DO_STEALTH_PREFIX) {
+            fHavePrefix = true;
+            memcpy(&prefix, &vData[35], 4);
+        }
+
+        CTxDestination address;
+        if (!ExtractDestination(pTxOut->scriptPubKey, address) || address.type() != typeid(CKeyID)) {
+            LogPrintf("%s: ExtractDestination failed.\n",  __func__);
+            return -1;
+        }
+
+        if (!ProcessStealthOutput(address, vchEphemPK, prefix, fHavePrefix, sShared, true)) {
+            // TODO: check all other outputs?
+            return 0;
+        }
+
+        int nNarrOffset = -1;
+        if (vData.size() > 40 && vData[39] == DO_NARR_CRYPT) {
+            nNarrOffset = 40;
+        } else
+        if (vData.size() > 35 && vData[34] == DO_NARR_CRYPT) {
+            nNarrOffset = 35;
+        }
+
+        if (nNarrOffset > -1) {
+            size_t lenNarr = vData.size() - nNarrOffset;
+            if (lenNarr < 1 || lenNarr > 32) { // min block size 8?
+                LogPrintf("%s: Invalid narration data length: %d\n", __func__, lenNarr);
+                return 2; // still found
+            }
+
+            SecMsgCrypter crypter;
+            crypter.SetKey(sShared.begin(), &vchEphemPK[0]);
+
+            std::vector<uint8_t> vchNarr;
+            if (!crypter.Decrypt(&vData[nNarrOffset], lenNarr, vchNarr)) {
+                LogPrintf("%s: Decrypt narration failed.\n", __func__);
+                return 2; // still found
+            }
+            sNarr = std::string(vchNarr.begin(), vchNarr.end());
+        }
+
+        return 2;
+    }
+
+    LogPrintf("%s: Unknown data output type %d.\n",  __func__, vData[0]);
+    return -1;
+};
+
+bool CWallet::ScanForOwnedOutputs(const CTransaction& tx, mapValue_t& mapNarr)
+{
+    LogPrintf("%s -- tx = %s\n", __func__, tx.ToString());
+    AssertLockHeld(cs_wallet);
+
+    bool fIsMine = false;
+    mapNarr.clear();
+
+    int32_t nOutputId = -1;
+    for (const CTxOut& txout : tx.vout) {
+        nOutputId++;
+        if (nOutputId < (int)tx.vout.size()-1 && IsDataScript(tx.vout[nOutputId+1].scriptPubKey)) {
+            std::string sNarr;
+            CTxOut txData = tx.vout[nOutputId+1];
+            if (CheckForStealthAndNarration(&txData, sNarr) < 0) {
+                LogPrintf("%s: txn %s, malformed data output %d.\n",  __func__, tx.GetHash().ToString(), nOutputId);
+            }
+
+            if (sNarr.length() > 0) {
+                std::string sKey = strprintf("n%d", nOutputId);
+                mapNarr[sKey] = sNarr;
+            }
+        }
+
+        if (IsMine(txout)) {
+            fIsMine = true;
+        }
+    }
+
+    return fIsMine;
 };
 //! End add for stealth address transactions
 

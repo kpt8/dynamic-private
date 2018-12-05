@@ -635,53 +635,44 @@ private:
     std::vector<char> _ssExtra;
 };
 
-class CTempRecipient
+class CStealthKeyMetadata
+{
+// Used to get secret for keys created by stealth transaction with wallet locked
+public:
+    CStealthKeyMetadata() {}
+
+    CStealthKeyMetadata(CPubKey pkEphem_, CPubKey pkScan_)
+    {
+        pkEphem = pkEphem_;
+        pkScan = pkScan_;
+    };
+
+    CPubKey pkEphem;
+    CPubKey pkScan;
+
+    ADD_SERIALIZE_METHODS;
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action)
+    {
+        READWRITE(pkEphem);
+        READWRITE(pkScan);
+    };
+};
+
+class CStealthAddressIndexed
 {
 public:
-    CTempRecipient() : nType(0), nAmount(0), nAmountSelected(0), fSubtractFeeFromAmount(false) {SetNull();};
-    CTempRecipient(CAmount nAmount_, bool fSubtractFeeFromAmount_, CScript scriptPubKey_)
-        : nAmount(nAmount_), nAmountSelected(nAmount_), fSubtractFeeFromAmount(fSubtractFeeFromAmount_), scriptPubKey(scriptPubKey_) {SetNull();};
+    CStealthAddressIndexed() {};
 
-    void SetNull()
+    CStealthAddressIndexed(std::vector<uint8_t>& addrRaw_) : addrRaw(addrRaw_) {};
+    std::vector<uint8_t> addrRaw;
+
+    ADD_SERIALIZE_METHODS;
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action)
     {
-        fNonceSet = false; // if true use nonce and vData from CTempRecipient
-        fScriptSet = false;
-        fChange = false;
-        nChildKey = 0;
-        nStealthPrefix = 0;
-        fExemptFeeSub = false;
+        READWRITE(addrRaw);
     };
-
-    void SetAmount(CAmount nValue)
-    {
-        nAmount = nValue;
-        nAmountSelected = nValue;
-    };
-
-    bool ApplySubFee(CAmount nFee, size_t nSubtractFeeFromAmount, bool &fFirst);
-
-    uint8_t nType;
-    CAmount nAmount;            // If fSubtractFeeFromAmount, nAmount = nAmountSelected - feeForOutput
-    CAmount nAmountSelected;
-    bool fSubtractFeeFromAmount;
-    bool fExemptFeeSub;         // Value too low to sub fee when blinded value split into two outputs
-    CTxDestination address;
-    CScript scriptPubKey;
-    std::vector<uint8_t> vData;
-
-    uint256 nonce;
-
-    uint64_t min_value;
-
-    CKey sEphem;
-    CPubKey pkTo;
-    int n;
-    std::string sNarration;
-    bool fScriptSet;
-    bool fChange;
-    bool fNonceSet;
-    uint32_t nChildKey; // update later
-    uint32_t nStealthPrefix;
 };
 
 /** 
@@ -825,6 +816,7 @@ public:
         fAnonymizableTallyCachedNonDenom = false;
         vecAnonymizableTallyCached.clear();
         vecAnonymizableTallyCachedNonDenom.clear();
+        nFoundStealth = 0;
     }
 
     std::map<uint256, CWalletTx> mapWallet;
@@ -847,6 +839,7 @@ public:
     int64_t nKeysLeftSinceAutoBackup;
 
     std::map<CKeyID, CHDPubKey> mapHdPubKeys; //<! memory map of HD extended pubkeys
+    uint32_t nFoundStealth; // for reporting, zero before use
 
     const CWalletTx* GetWalletTx(const uint256& hash) const;
 
@@ -1234,8 +1227,17 @@ public:
     int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index, bool& fUpdate);
     int ExtKeyGetIndex(CExtKeyAccount* sea, uint32_t& index);
     int NewStealthAddress(CEKAStealthKey& akStealthOut, uint32_t nPrefixBits, const char* pPrefix, bool fBech32 = false);
-    int ExtKeyGetDestination(const CExtKeyPair& ek, CPubKey& pkDest, uint32_t& nKey);
-    int ExpandStealthRecipients(std::vector<CTempRecipient>& vecSend, CStoredExtKey* pc, std::string& sError);
+    int ExtKeyAppendToPack(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& idKey, const CEKAKey& ak, bool& fUpdateAcc) const;
+    int ExtKeyAppendToPack(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& idKey, const CEKASCKey& asck, bool& fUpdateAcc) const;
+    int ExtKeySaveKey(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& keyId, const CEKASCKey& asck) const;
+    bool IndexStealthKey(CWalletDB* pwdb, uint160& hash, const CStealthAddressIndexed& sxi, uint32_t& id);
+    bool UpdateStealthAddressIndex(const CKeyID& idK, const CStealthAddressIndexed& sxi, uint32_t& id);
+    bool GetStealthAddressScanKey(CStealthAddress& sxAddr) const;
+    bool GetStealthLinked(const CKeyID& idK, CStealthAddress& sx);
+    bool ProcessStealthOutput(const CTxDestination& address, std::vector<uint8_t>& vchEphemPK, 
+                                uint32_t prefix, bool fHavePrefix, CKey& sShared, bool fNeedShared);
+    int CheckForStealthAndNarration(const CTxOut* pTxOut, std::string& sNarr);
+    bool ScanForOwnedOutputs(const CTransaction& tx, mapValue_t& mapNarr);
     //! End add for stealth address transactions
 };
 

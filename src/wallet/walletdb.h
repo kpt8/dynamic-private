@@ -29,6 +29,8 @@ struct CBlockLocator;
 class CKeyPool;
 class CMasterKey;
 class CScript;
+class CStealthAddressIndexed;
+class CStealthKeyMetadata;
 class CWallet;
 class CWalletTx;
 class uint160;
@@ -149,8 +151,7 @@ public:
     static void IncrementUpdateCounter();
     static unsigned int GetUpdateCounter();
     //! Begin add for stealth address transactions
-    //! Begin a new transaction
-    bool TxnBegin();
+    bool TxnBegin(); //! Begin a new transaction
     bool ReadExtKey(const CKeyID& identifier, CStoredExtKey& ek32);
     bool WriteExtKey(const CKeyID& identifier, const CStoredExtKey& ek32);
     bool ReadNamedExtKeyId(const std::string& name, CKeyID& identifier);
@@ -163,6 +164,18 @@ public:
     bool WriteFlag(const std::string& name, const int32_t& nValue);
     bool ReadExtStealthKeyPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKAStealthKeyPack>& aksPak);
     bool WriteExtStealthKeyPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKAStealthKeyPack>& aksPak);
+    bool WriteStealthKeyMeta(const CKeyID& keyId, const CStealthKeyMetadata& sxKeyMeta);
+    bool EraseStealthKeyMeta(const CKeyID& keyId);
+    bool ReadStealthAddressIndex(uint32_t id, CStealthAddressIndexed& sxi);
+    bool WriteStealthAddressIndex(const uint32_t id, const CStealthAddressIndexed& sxi);
+    bool ReadStealthAddressIndexReverse(const uint160& hash, uint32_t& id);
+    bool WriteStealthAddressIndexReverse(const uint160& hash, const uint32_t id);
+    bool ReadStealthAddressLink(const CKeyID& keyId, uint32_t& id);
+    bool WriteStealthAddressLink(const CKeyID& keyId, const uint32_t id);
+    bool ReadExtStealthKeyChildPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKASCKeyPack>& asckPak);
+    bool WriteExtStealthKeyChildPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKASCKeyPack>& asckPak);
+    bool ReadExtKeyPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKAKeyPack>& ekPak);
+    bool WriteExtKeyPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKAKeyPack>& ekPak);
     //! End add for stealth address transactions
 
 private:
