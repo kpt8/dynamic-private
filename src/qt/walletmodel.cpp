@@ -219,7 +219,6 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
     bool fSubtractFeeFromAmount = false;
     QList<SendCoinsRecipient> recipients = transaction.getRecipients();
     std::vector<CRecipient> vecSend;
-    std::vector<CRecipientData> vecSendData;
 
     if (recipients.empty()) {
         return OK;
@@ -288,8 +287,10 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
             CRecipient recipient = {scriptPubKey, rcp.amount, rcp.fSubtractFeeFromAmount};
             vecSend.push_back(recipient);
             if (fStealthAddress) {
-                CRecipientData sendData = {DO_STEALTH, vStealthData};
-                vecSendData.push_back(sendData);
+                CScript scriptData;
+                scriptData << OP_RETURN << vStealthData;
+                CRecipient sendData = {scriptData, 0, fSubtractFeeFromAmount};
+                vecSend.push_back(sendData);
             }
             total += rcp.amount;
         }
@@ -322,7 +323,7 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
             return TransactionCreationFailed;
         }
 
-        bool fCreated = wallet->CreateTransaction(vecSend, vecSendData, *newTx, *keyChange, nFeeRequired, nChangePosRet, strFailReason, coinControl, true, recipients[0].inputType, recipients[0].fUseInstantSend);
+        bool fCreated = wallet->CreateTransaction(vecSend, *newTx, *keyChange, nFeeRequired, nChangePosRet, strFailReason, coinControl, true, recipients[0].inputType, recipients[0].fUseInstantSend);
         transaction.setTransactionFee(nFeeRequired);
         if (fSubtractFeeFromAmount && fCreated)
             transaction.reassignAmounts(nChangePosRet);

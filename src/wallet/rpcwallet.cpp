@@ -360,15 +360,16 @@ static void SendMoney(const CTxDestination& address, CAmount nValue, bool fSubtr
     CAmount nFeeRequired;
     std::string strError;
     std::vector<CRecipient> vecSend;
-    std::vector<CRecipientData> vecSendData;
     int nChangePosRet = -1;
     CRecipient recipient = {scriptPubKey, nValue, fSubtractFeeFromAmount};
     vecSend.push_back(recipient);
     if (fStealthAddress) {
-        CRecipientData sendData = {DO_STEALTH, vStealthData};
-        vecSendData.push_back(sendData);
+        CScript scriptData;
+        scriptData << OP_RETURN << vStealthData;
+        CRecipient sendData = {scriptData, 0, fSubtractFeeFromAmount};
+        vecSend.push_back(sendData);
     }
-    if (!pwalletMain->CreateTransaction(vecSend, vecSendData, wtxNew, reservekey, nFeeRequired, nChangePosRet,
+    if (!pwalletMain->CreateTransaction(vecSend, wtxNew, reservekey, nFeeRequired, nChangePosRet,
             strError, NULL, true, fUsePrivateSend ? ONLY_DENOMINATED : ALL_COINS, fUseInstantSend)) {
         if (!fSubtractFeeFromAmount && nValue + nFeeRequired > curBalance)
             strError = strprintf("Error: This transaction requires a transaction fee of at least %s", FormatMoney(nFeeRequired));
@@ -1109,7 +1110,6 @@ UniValue sendmany(const JSONRPCRequest& request)
 
     std::set<CDynamicAddress> setAddress;
     std::vector<CRecipient> vecSend;
-    std::vector<CRecipientData> vecSendData;
 
     CAmount totalAmount = 0;
     std::vector<std::string> keys = sendTo.getKeys();
@@ -1155,8 +1155,10 @@ UniValue sendmany(const JSONRPCRequest& request)
         CRecipient recipient = {scriptPubKey, nAmount, fSubtractFeeFromAmount};
         vecSend.push_back(recipient);
         if (fStealthAddress) {
-            CRecipientData sendData = {DO_STEALTH, vStealthData};
-            vecSendData.push_back(sendData);
+            CScript scriptData;
+            scriptData << OP_RETURN << vStealthData;
+            CRecipient sendData = {scriptData, 0, fSubtractFeeFromAmount};
+            vecSend.push_back(sendData);
         }
     }
 
@@ -1179,7 +1181,7 @@ UniValue sendmany(const JSONRPCRequest& request)
     if (request.params.size() > 7)
         fUsePrivateSend = request.params[7].get_bool();
 
-    bool fCreated = pwalletMain->CreateTransaction(vecSend, vecSendData, wtx, keyChange, nFeeRequired, nChangePosRet, strFailReason,
+    bool fCreated = pwalletMain->CreateTransaction(vecSend, wtx, keyChange, nFeeRequired, nChangePosRet, strFailReason,
         NULL, true, fUsePrivateSend ? ONLY_DENOMINATED : ALL_COINS, fUseInstantSend);
     if (!fCreated)
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, strFailReason);

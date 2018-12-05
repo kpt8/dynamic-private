@@ -2944,7 +2944,6 @@ struct CompareByPriority {
 bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const std::set<int>& setSubtractFeeFromOutputs, bool keepReserveKey, const CTxDestination& destChange)
 {
     std::vector<CRecipient> vecSend;
-    std::vector<CRecipientData> vecSendData;
 
     // Turn the txout set into a CRecipient vector
     for (size_t idx = 0; idx < tx.vout.size(); idx++) {
@@ -2961,12 +2960,15 @@ bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool ov
                 LogPrintf("%s -- PrepareStealthOutput failed. Error = %s\n", __func__, sError);
                 return false;
             }
-            CRecipient recipient = {scriptPubKey, txOut.nValue, setSubtractFeeFromOutputs.count(idx) == 1};
+            bool fSubtractFeeFromAmount = (setSubtractFeeFromOutputs.count(idx) == 1);
+            CRecipient recipient = {scriptPubKey, txOut.nValue, fSubtractFeeFromAmount};
             vecSend.push_back(recipient);
-            CRecipientData sendData = {DO_STEALTH, vStealthData};
-            vecSendData.push_back(sendData);
+            CScript scriptData;
+            scriptData << OP_RETURN << vStealthData;
+            CRecipient sendData = {scriptData, 0, fSubtractFeeFromAmount};
+            vecSend.push_back(sendData);
         }
-        else 
+        else
         {
             CRecipient recipient = {txOut.scriptPubKey, txOut.nValue, setSubtractFeeFromOutputs.count(idx) == 1};
             vecSend.push_back(recipient);
@@ -2985,7 +2987,7 @@ bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool ov
 
     CReserveKey reservekey(this);
     CWalletTx wtx;
-    if (!CreateTransaction(vecSend, vecSendData, wtx, reservekey, nFeeRet, nChangePosInOut, strFailReason, &coinControl, false))
+    if (!CreateTransaction(vecSend, wtx, reservekey, nFeeRet, nChangePosInOut, strFailReason, &coinControl, false))
         return false;
 
     if (nChangePosInOut != -1)
@@ -3442,12 +3444,6 @@ bool CWallet::ConvertList(std::vector<CTxIn> vecTxIn, std::vector<CAmount>& vecA
 
 bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet, int& nChangePosInOut, std::string& strFailReason, const CCoinControl* coinControl, bool sign, AvailableCoinsType nCoinType, bool fUseInstantSend, bool fIsBDAP)
 {
-    const std::vector<CRecipientData> vecSendData; //pass an empty data vector
-    return CreateTransaction(vecSend, vecSendData, wtxNew, reservekey, nFeeRet, nChangePosInOut, strFailReason, coinControl, sign, nCoinType, fUseInstantSend, fIsBDAP);
-}
-
-bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, const std::vector<CRecipientData>& vecSendData, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet, int& nChangePosInOut, std::string& strFailReason, const CCoinControl* coinControl, bool sign, AvailableCoinsType nCoinType, bool fUseInstantSend, bool fIsBDAP)
-{
     CAmount nFeePay = fUseInstantSend ? CTxLockRequest().GetMinFee() : 0;
 
     CAmount nValue = 0;
@@ -3466,10 +3462,6 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, const st
     if (vecSend.empty()) {
         strFailReason = _("Transaction must have at least one recipient");
         return false;
-    }
-
-    if (!vecSendData.empty()) {
-        LogPrintf("%s -- vecSendData is not empty.\n", __func__);
     }
 
     wtxNew.fTimeReceivedIsTxTime = true;
@@ -3607,14 +3599,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, const st
                     }
                     txNew.vout.push_back(txout);
                 }
-                // vouts for data
-                for (const CRecipientData& data : vecSendData) {
-                    // Create OP_RETURN script for stealth transactions
-                    CScript scriptData;
-                    scriptData << OP_RETURN << data.vData;
-                    CTxOut txout(0, scriptData);
-                    txNew.vout.push_back(txout);
-                }
+
                 // Choose coins to use
                 CAmount nValueIn = 0;
                 setCoins.clear();
