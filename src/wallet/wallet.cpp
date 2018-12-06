@@ -3735,7 +3735,8 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
 
                 sort(txNew.vin.begin(), txNew.vin.end(), CompareInputBIP69());
                 sort(vecTxPSInTmp.begin(), vecTxPSInTmp.end(), CompareInputBIP69());
-                sort(txNew.vout.begin(), txNew.vout.end(), CompareOutputBIP69());
+                // Disable BIP 69 vout sorting. Sorting interferes with stealth address decoding by the recipient.
+                //sort(txNew.vout.begin(), txNew.vout.end(), CompareOutputBIP69());
 
                 // If there was change output added before, we must update its position now
                 if (nChangePosInOut != -1) {
