@@ -6716,15 +6716,18 @@ static bool GetDataFromScript(const CScript& data, std::vector<uint8_t>& vData)
     return true;
 }
 
-int CWallet::CheckForStealthAndNarration(const CTxOut* pTxOut, std::string& sNarr)
+
+int CWallet::CheckForStealthAndNarration(const CTxOut* pTxOut, const CTxOut* pTxData, std::string& sNarr)
 {
     LogPrintf("%s -- txout = %s\n", __func__, pTxOut->ToString());
     // returns: -1 error, 0 nothing found, 1 narration, 2 stealth
     CKey sShared;
     std::vector<uint8_t> vchEphemPK;
     std::vector<uint8_t> vData;
-    if (!GetDataFromScript(pTxOut->scriptPubKey, vData))
+    if (!GetDataFromScript(pTxData->scriptPubKey, vData)) {
+        LogPrintf("%s -- GetDataFromScript failed.\n", __func__);
         return 0;
+    }
     
     if (vData.size() < 1) {
         return -1;
@@ -6756,13 +6759,17 @@ int CWallet::CheckForStealthAndNarration(const CTxOut* pTxOut, std::string& sNar
         }
 
         CTxDestination address;
-        if (!ExtractDestination(pTxOut->scriptPubKey, address) || address.type() != typeid(CKeyID)) {
+        if (!ExtractDestination(pTxOut->scriptPubKey, address)) {
             LogPrintf("%s: ExtractDestination failed.\n",  __func__);
             return -1;
         }
-
+        if (address.type() != typeid(CKeyID)) {
+            LogPrintf("%s: address.type() != typeid(CKeyID) failed\n",  __func__);
+            return -1;
+        }
         if (!ProcessStealthOutput(address, vchEphemPK, prefix, fHavePrefix, sShared, true)) {
             // TODO: check all other outputs?
+            LogPrintf("%s: ProcessStealthOutput failed\n",  __func__);
             return 0;
         }
 
@@ -6807,25 +6814,27 @@ bool CWallet::ScanForOwnedOutputs(const CTransaction& tx, mapValue_t& mapNarr)
     bool fIsMine = false;
     mapNarr.clear();
 
-    int32_t nOutputId = -1;
-    for (const CTxOut& txout : tx.vout) {
-        nOutputId++;
-        if (nOutputId < (int)tx.vout.size()-1 && IsDataScript(tx.vout[nOutputId+1].scriptPubKey)) {
+    int32_t nOutputId = 0;
+    for (const CTxOut& txData : tx.vout) {
+        bool fIsData = IsDataScript(txData.scriptPubKey);
+        if (fIsData && nOutputId > 0) {
+            CTxOut txStealthAddressOut = tx.vout[nOutputId - 1];
             std::string sNarr;
-            CTxOut txData = tx.vout[nOutputId+1];
-            if (CheckForStealthAndNarration(&txData, sNarr) < 0) {
+            LogPrintf("%s: Data script found. %s\n",  __func__, txData.ToString());
+            if (CheckForStealthAndNarration(&txStealthAddressOut, &txData, sNarr) < 0) {
                 LogPrintf("%s: txn %s, malformed data output %d.\n",  __func__, tx.GetHash().ToString(), nOutputId);
             }
 
             if (sNarr.length() > 0) {
+                LogPrintf("%s -- sNarr = %s\n", __func__, sNarr);
                 std::string sKey = strprintf("n%d", nOutputId);
                 mapNarr[sKey] = sNarr;
             }
+            if (IsMine(txStealthAddressOut)) {
+                fIsMine = true;
+            }
         }
-
-        if (IsMine(txout)) {
-            fIsMine = true;
-        }
+        nOutputId++;
     }
 
     return fIsMine;

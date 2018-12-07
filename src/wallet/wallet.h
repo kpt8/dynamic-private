@@ -1230,7 +1230,7 @@ public:
     bool GetStealthLinked(const CKeyID& idK, CStealthAddress& sx);
     bool ProcessStealthOutput(const CTxDestination& address, std::vector<uint8_t>& vchEphemPK, 
                                 uint32_t prefix, bool fHavePrefix, CKey& sShared, bool fNeedShared);
-    int CheckForStealthAndNarration(const CTxOut* pTxOut, std::string& sNarr);
+    int CheckForStealthAndNarration(const CTxOut* pTxOut, const CTxOut* pTxData, std::string& sNarr);
     bool ScanForOwnedOutputs(const CTransaction& tx, mapValue_t& mapNarr);
     //! End add for stealth address transactions
 };
