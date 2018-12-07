@@ -630,6 +630,15 @@ bool ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue, CW
                 strErr = "Error reading wallet database: LoadHDPubKey failed";
                 return false;
             }
+        } else if (strType == "eacc") {
+            CKeyID keyID;
+            ssKey >> keyID;
+            CExtKeyAccount extKey;
+            ssValue >> extKey;
+            if (0 != pwallet->ExtKeyAddAccountToMaps(keyID, &extKey, false)) {
+                strErr = "Error reading wallet database: SetExtKeyAccount failed";
+                return false;
+            }
         }
     } catch (...) {
         return false;
