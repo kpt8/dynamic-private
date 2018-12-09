@@ -1198,6 +1198,7 @@ public:
     bool GetDHTPubKeys(std::vector<std::vector<unsigned char>>& vvchDHTPubKeys) const;
 
     //! Begin add for stealth address transactions
+    CWalletDB* GetWalletDB();
     int ExtKeyNew32(CExtKey& out);
     int ExtKeyNew32(CExtKey& out, uint8_t* data, uint32_t lenData);
     int ExtKeyUnlock(CStoredExtKey* sek, const CKeyingMaterial& vMKey);
