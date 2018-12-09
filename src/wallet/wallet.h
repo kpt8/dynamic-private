@@ -728,8 +728,7 @@ private:
     std::set<int64_t> setInternalKeyPool;
     std::set<int64_t> setExternalKeyPool;
 
-    int64_t nTimeFirstKey;
-
+    int64_t nTimeFirstKey GUARDED_BY(cs_wallet) = 0;
     /**
      * Private version of AddWatchOnly method which does not accept a
      * timestamp, and which will reset the wallet's nTimeFirstKey value to 1 if
@@ -1232,6 +1231,12 @@ public:
                                 uint32_t prefix, bool fHavePrefix, CKey& sShared, bool fNeedShared);
     int CheckForStealthAndNarration(const CTxOut* pTxOut, const CTxOut* pTxData, std::string& sNarr);
     bool ScanForOwnedOutputs(const CTransaction& tx, mapValue_t& mapNarr);
+    int ExtKeyLoadAccountKeys(CWalletDB* pwdb, CExtKeyAccount* sea);
+    int ExtKeyLoadMaster();
+    int ExtKeyLoadAccounts();
+    int ExtKeyLoadAccountPacks();
+    int LoadStealthAddresses();
+    int PrepareLookahead();
     //! End add for stealth address transactions
 };
 

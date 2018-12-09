@@ -176,6 +176,11 @@ public:
     bool WriteExtStealthKeyChildPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKASCKeyPack>& asckPak);
     bool ReadExtKeyPack(const CKeyID& identifier, const uint32_t nPack, std::vector<CEKAKeyPack>& ekPak);
     bool WriteExtKeyPack(const CKeyID& identifier, const uint32_t nPack, const std::vector<CEKAKeyPack>& ekPak);
+    bool LoadExtKeyAccounts(std::vector<std::pair<CKeyID, CExtKeyAccount*>>& vExtKeyAccount, int64_t& nTimeFirstKey);
+    bool LoadExtKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKAKeyPack>>>& vExtKeyAccount);
+    bool LoadExtStealthKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKAStealthKeyPack>>>& vExtStealthKeyPacks);
+    bool LoadSharedStealthKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKASCKeyPack>>>& vStealthSharedKeyPacks);
+    bool LoadStealthKeyAddresses(std::vector<std::pair<CKeyID, CStealthAddress>>& vStealthAddresses);
     //! End add for stealth address transactions
 
 private:

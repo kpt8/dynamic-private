@@ -1185,3 +1185,238 @@ bool CWalletDB::WriteExtKeyPack(const CKeyID& identifier, const uint32_t nPack, 
 {
     return Write(PackKey("epak", identifier, nPack), ekPak);
 };
+
+bool CWalletDB::LoadExtKeyAccounts(std::vector<std::pair<CKeyID, CExtKeyAccount*>>& vExtKeyAccount, int64_t& nTimeFirstKey)
+{
+    try {
+        // Get cursor
+        Dbc* pcursor = GetCursor();
+        if (!pcursor)
+            throw std::runtime_error(std::string(__func__) + ": cannot create DB cursor");
+
+        while (true) {
+            // Read next record
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            int ret = ReadAtCursor(pcursor, ssKey, ssValue);
+            if (ret == DB_NOTFOUND) {
+                break;
+            }
+            else if (ret != 0) {
+                LogPrintf("%s -- Error reading next record from wallet database\n", __func__);
+                return false;
+            }
+
+            std::string strType;
+            ssKey >> strType;
+            if (strType == "eacc") {
+                CKeyID idAccount;
+                ssKey >> idAccount;
+                LogPrintf("%s -- Loading account %s\n", __func__, HDAccIDToString(idAccount));
+                CExtKeyAccount *sea = new CExtKeyAccount();
+                ssValue >> *sea;
+                if (!(sea->nFlags & EAF_ACTIVE)) {
+                    LogPrintf("%s --Skipping inactive %s\n", __func__, HDAccIDToString(idAccount));
+                    delete sea;
+                    continue;
+                }
+                // Find earliest key creation time, as wallet birthday
+                int64_t nCreatedAt;
+                GetCompressedInt64(sea->mapValue[EKVT_CREATED_AT], (uint64_t&)nCreatedAt);
+                if (!nTimeFirstKey || (nCreatedAt && nCreatedAt < nTimeFirstKey)) {
+                    nTimeFirstKey = nCreatedAt;
+                }
+                LogPrintf("%s -- Adding account %s\n", __func__, HDAccIDToString(idAccount));
+                const std::pair<CKeyID, CExtKeyAccount*> pairKeyAccount(idAccount, sea);
+                vExtKeyAccount.push_back(pairKeyAccount);
+            }
+        }
+        pcursor->close();
+    } catch (const boost::thread_interrupted&) {
+        throw;
+    } catch (...) {
+        return false;
+    }
+    return true;
+};
+
+bool CWalletDB::LoadExtKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKAKeyPack>>>& vExtKeyAccount)
+{
+    try {
+        // Get cursor
+        Dbc* pcursor = GetCursor();
+        if (!pcursor)
+            throw std::runtime_error(std::string(__func__) + ": cannot create DB cursor");
+
+        while (true) {
+            // Read next record
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            int ret = ReadAtCursor(pcursor, ssKey, ssValue);
+            if (ret == DB_NOTFOUND) {
+                break;
+            }
+            else if (ret != 0) {
+                LogPrintf("%s -- Error reading next record from wallet database\n", __func__);
+                return false;
+            }
+
+            std::string strType;
+            ssKey >> strType;
+            if (strType == "epak") {
+                CKeyID idAccount;
+                uint32_t nPack;
+                ssKey >> idAccount;
+                ssKey >> nPack;
+                LogPrintf("%s -- Loading ext pack %s, nPack = %u\n", __func__, HDAccIDToString(idAccount), nPack);
+                std::vector<CEKAKeyPack> ekPak;
+                ssValue >> ekPak;
+                if (ekPak.size() > 0) {
+                    std::pair<CKeyID, std::vector<CEKAKeyPack>> pairExKeyPack(idAccount, ekPak);
+                    vExtKeyAccount.push_back(pairExKeyPack);
+                }
+            }
+        }
+        pcursor->close();
+    } catch (const boost::thread_interrupted&) {
+        throw;
+    } catch (...) {
+        return false;
+    }
+    return true;
+};
+
+bool CWalletDB::LoadExtStealthKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKAStealthKeyPack>>>& vExtStealthKeyPacks)
+{
+    try {
+        // Get cursor
+        Dbc* pcursor = GetCursor();
+        if (!pcursor)
+            throw std::runtime_error(std::string(__func__) + ": cannot create DB cursor");
+
+        while (true) {
+            // Read next record
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            int ret = ReadAtCursor(pcursor, ssKey, ssValue);
+            if (ret == DB_NOTFOUND) {
+                break;
+            }
+            else if (ret != 0) {
+                LogPrintf("%s -- Error reading next record from wallet database\n", __func__);
+                return false;
+            }
+
+            std::string strType;
+            ssKey >> strType;
+            if (strType == "espk") {
+                CKeyID idAccount;
+                uint32_t nPack;
+                ssKey >> idAccount;
+                ssKey >> nPack;
+                LogPrintf("%s -- Loading account stealth key pack %s %u\n", __func__, idAccount.ToString(), nPack);
+                std::vector<CEKAStealthKeyPack> aksPak;
+                ssValue >> aksPak;
+                if (aksPak.size() > 0) {
+                    std::pair<CKeyID, std::vector<CEKAStealthKeyPack>> pairExtStealthPack(idAccount, aksPak);
+                    vExtStealthKeyPacks.push_back(pairExtStealthPack);
+                }
+            }
+        }
+        pcursor->close();
+    } catch (const boost::thread_interrupted&) {
+        throw;
+    } catch (...) {
+        return false;
+    }
+    return true;
+};
+
+bool CWalletDB::LoadSharedStealthKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKASCKeyPack>>>& vStealthSharedKeyPacks)
+{
+    try {
+        // Get cursor
+        Dbc* pcursor = GetCursor();
+        if (!pcursor)
+            throw std::runtime_error(std::string(__func__) + ": cannot create DB cursor");
+
+        while (true) {
+            // Read next record
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            int ret = ReadAtCursor(pcursor, ssKey, ssValue);
+            if (ret == DB_NOTFOUND) {
+                break;
+            }
+            else if (ret != 0) {
+                LogPrintf("%s -- Error reading next record from wallet database\n", __func__);
+                return false;
+            }
+
+            std::string strType;
+            ssKey >> strType;
+            if (strType == "ecpk") {
+                CKeyID idAccount;
+                uint32_t nPack;
+                ssKey >> idAccount;
+                ssKey >> nPack;
+                LogPrintf("%s -- Loading shared stealth key pack %s %u\n", __func__, idAccount.ToString(), nPack);
+                std::vector<CEKASCKeyPack> asckPak;
+                ssValue >> asckPak;
+                if (asckPak.size() > 0) {
+                    std::pair<CKeyID, std::vector<CEKASCKeyPack>> pairSharedKeyPack(idAccount, asckPak);
+                    vStealthSharedKeyPacks.push_back(pairSharedKeyPack);
+                }
+            }
+        }
+        pcursor->close();
+    } catch (const boost::thread_interrupted&) {
+        throw;
+    } catch (...) {
+        return false;
+    }
+    return true;
+};
+
+bool CWalletDB::LoadStealthKeyAddresses(std::vector<std::pair<CKeyID, CStealthAddress>>& vStealthAddresses)
+{
+    try {
+        // Get cursor
+        Dbc* pcursor = GetCursor();
+        if (!pcursor)
+            throw std::runtime_error(std::string(__func__) + ": cannot create DB cursor");
+
+        while (true) {
+            // Read next record
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            int ret = ReadAtCursor(pcursor, ssKey, ssValue);
+            if (ret == DB_NOTFOUND) {
+                break;
+            }
+            else if (ret != 0) {
+                LogPrintf("%s -- Error reading next record from wallet database\n", __func__);
+                return false;
+            }
+
+            std::string strType;
+            ssKey >> strType;
+            if (strType == "sxad") {
+                CKeyID idAccount;
+                ssKey >> idAccount;
+                LogPrintf("%s -- Loading shared stealth address %s\n", __func__, idAccount.ToString());
+                CStealthAddress sx;
+                ssValue >> sx;
+                LogPrintf("%s -- Loading stealth address %s\n", __func__, sx.Encoded());
+                std::pair<CKeyID, CStealthAddress> pairStealthAdresss(idAccount, sx);
+                vStealthAddresses.push_back(pairStealthAdresss);
+            }
+        }
+        pcursor->close();
+    } catch (const boost::thread_interrupted&) {
+        throw;
+    } catch (...) {
+        return false;
+    }
+    return true;
+};
