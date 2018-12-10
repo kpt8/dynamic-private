@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef _BITCOIN_CUCKOOCACHE_H_
-#define _BITCOIN_CUCKOOCACHE_H_
+#ifndef DYNAMIC_CUCKOOCACHE_H_
+#define DYNAMIC_CUCKOOCACHE_H_
 
 #include <algorithm>
 #include <array>
