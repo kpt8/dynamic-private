@@ -181,6 +181,7 @@ public:
     bool LoadExtStealthKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKAStealthKeyPack>>>& vExtStealthKeyPacks);
     bool LoadSharedStealthKeyPacks(std::vector<std::pair<CKeyID, std::vector<CEKASCKeyPack>>>& vStealthSharedKeyPacks);
     bool LoadStealthKeyAddresses(std::vector<std::pair<CKeyID, CStealthAddress>>& vStealthAddresses);
+    bool WriteStealthAddress(const CStealthAddress& sxAddr);
     //! End add for stealth address transactions
 
 private:

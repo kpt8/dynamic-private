@@ -1420,3 +1420,8 @@ bool CWalletDB::LoadStealthKeyAddresses(std::vector<std::pair<CKeyID, CStealthAd
     }
     return true;
 };
+
+bool CWalletDB::WriteStealthAddress(const CStealthAddress& sxAddr)
+{
+    return Write(std::make_pair(std::string("sxad"), sxAddr.scan_pubkey), sxAddr);
+};
