@@ -2931,7 +2931,7 @@ UniValue importstealthaddress(const JSONRPCRequest &request)
             "3. label               (string, optional) If specified the key is added to the address book.\n"
             "4. num_prefix_bits     (int, optional, default=0)\n"
             "5. prefix_num          (int, optional) If prefix_num is not specified the prefix will be selected deterministically.\n"
-            "6. bech32              (bool, optional, default=false) Use Bech32 encoding.\n"
+            "6. bech32              (boolean, optional, default=false) Use Bech32 encoding.\n"
             "\nResult:\n"
             "\"address\"              (string) The new dynamic stealth address\n"
             "\nExamples:\n"
@@ -3085,6 +3085,156 @@ UniValue importstealthaddress(const JSONRPCRequest &request)
     return result;
 }
 
+static int ListLooseStealthAddresses(UniValue& arr, bool fShowSecrets, bool fAddressBookInfo)
+{
+    std::set<CStealthAddress>::iterator it;
+    for (it = pwalletMain->stealthAddresses.begin(); it != pwalletMain->stealthAddresses.end(); ++it) {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("Label", it->label);
+        obj.pushKV("Address", it->Encoded());
+
+        if (fShowSecrets) {
+            obj.pushKV("Scan Secret", CDynamicSecret(it->scan_secret).ToString());
+
+            CKeyID sid = it->GetSpendKeyID();
+            CKey skSpend;
+            if (pwalletMain->GetKey(sid, skSpend)) {
+                obj.pushKV("Spend Secret", CDynamicSecret(skSpend).ToString());
+            }
+        }
+
+        if (fAddressBookInfo) {
+            std::map<CTxDestination, CAddressBookData>::const_iterator mi = pwalletMain->mapAddressBook.find(*it);
+            if (mi != pwalletMain->mapAddressBook.end()) {
+                // TODO: confirm vPath?
+
+                if (mi->second.name != it->label) {
+                    obj.pushKV("addr_book_label", mi->second.name);
+                }
+                if (!mi->second.purpose.empty()) {
+                    obj.pushKV("purpose", mi->second.purpose);
+                }
+
+                UniValue objDestData(UniValue::VOBJ);
+                for (const auto &pair : mi->second.destdata) {
+                    obj.pushKV(pair.first, pair.second);
+                }
+                if (objDestData.size() > 0) {
+                    obj.pushKV("destdata", objDestData);
+                }
+            }
+        }
+
+        arr.push_back(obj);
+    }
+
+    return 0;
+};
+
+UniValue liststealthaddresses(const JSONRPCRequest &request)
+{
+    if (!EnsureWalletIsAvailable(request.fHelp))
+        return NullUniValue;
+
+    if (request.fHelp || request.params.size() > 1)
+        throw std::runtime_error(
+            "liststealthaddresses ( show_secrets )\n"
+            "List stealth addresses in this wallet."
+            + HelpRequiringPassphrase() +
+            "\nArguments:\n"
+            "1. show_secrets        (boolean, optional, default=false) Display secret keys to stealth addresses.\n"
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"Account\": \"str\",            (string) Account name.\n"
+            "    \"Stealth Addresses\": [\n"
+            "      {\n"
+            "        \"Label\": \"str\",          (string) Stealth address label.\n"
+            "        \"Address\": \"str\",        (string) Stealth address.\n"
+            "        \"Scan Secret\": \"str\",    (string) Scan secret, if show_secrets=1.\n"
+            "        \"Spend Secret\": \"str\",   (string) Spend secret, if show_secrets=1.\n"
+            "      }\n"
+            "    ]\n"
+            "  }...\n"
+            "]\n"
+            "\nExamples:\n"
+            + HelpExampleCli("liststealthaddresses", "") +
+            "\nAs a JSON-RPC call\n"
+            + HelpExampleRpc("liststealthaddresses", ""));
+
+    bool fShowSecrets = request.params.size() > 0 ? (request.params[0].get_str() == "1" || request.params[0].get_str() == "true" ? true : false) : false;
+
+    if (fShowSecrets) {
+        EnsureWalletIsUnlocked();
+    }
+
+    UniValue result(UniValue::VARR);
+
+    ExtKeyAccountMap::const_iterator mi;
+    for (mi = pwalletMain->mapExtAccounts.begin(); mi != pwalletMain->mapExtAccounts.end(); ++mi) {
+        CExtKeyAccount *ea = mi->second;
+
+        if (ea->mapStealthKeys.size() < 1) {
+            continue;
+        }
+
+        UniValue rAcc(UniValue::VOBJ);
+        UniValue arrayKeys(UniValue::VARR);
+
+        rAcc.pushKV("Account", ea->sLabel);
+
+        AccStealthKeyMap::iterator it;
+        for (it = ea->mapStealthKeys.begin(); it != ea->mapStealthKeys.end(); ++it) {
+            const CEKAStealthKey &aks = it->second;
+
+            UniValue objA(UniValue::VOBJ);
+            objA.pushKV("Label", aks.sLabel);
+            objA.pushKV("Address", aks.ToStealthAddress());
+
+            if (fShowSecrets) {
+                objA.pushKV("Scan Secret", CDynamicSecret(aks.skScan).ToString());
+                std::string sSpend;
+                CStoredExtKey *sekAccount = ea->ChainAccount();
+                if (sekAccount && !sekAccount->fLocked) {
+                    CKey skSpend;
+                    if (ea->GetKey(aks.akSpend, skSpend)) {
+                        sSpend = CDynamicSecret(skSpend).ToString();
+                    } else {
+                        sSpend = "Extract failed.";
+                    }
+                } else {
+                    sSpend = "Account Locked.";
+                }
+                objA.pushKV("Spend Secret", sSpend);
+            }
+
+            arrayKeys.push_back(objA);
+        }
+
+        if (arrayKeys.size() > 0){
+            rAcc.pushKV("Stealth Addresses", arrayKeys);
+            result.push_back(rAcc);
+        }
+    }
+
+
+    if (pwalletMain->stealthAddresses.size() > 0) {
+        UniValue rAcc(UniValue::VOBJ);
+        UniValue arrayKeys(UniValue::VARR);
+
+        rAcc.pushKV("Account", "Loose Keys");
+
+        ListLooseStealthAddresses(arrayKeys, fShowSecrets, false);
+
+        if (arrayKeys.size() > 0) {
+            rAcc.pushKV("Stealth Addresses", arrayKeys);
+            result.push_back(rAcc);
+        }
+    }
+
+    return result;
+}
+
 extern UniValue dumpprivkey(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue importprivkey(const JSONRPCRequest& request);
 extern UniValue importaddress(const JSONRPCRequest& request);
@@ -3165,8 +3315,9 @@ static const CRPCCommand commands[] =
         {"wallet", "importelectrumwallet", &importelectrumwallet, true, {"filename", "index"}},
         {"wallet", "getnewstealthaddress", &getnewstealthaddress, true, {"label", "num_prefix_bits", "prefix_num", "bech32"}},
         {"wallet", "importstealthaddress", &importstealthaddress, true, {"scan_secret", "spend_secret", "label", "num_prefix_bits", "prefix_num", "bech32"}},
+        {"wallet", "liststealthaddresses", &liststealthaddresses, true, {"show_secrets"}},
 };
- 
+
 void RegisterWalletRPCCommands(CRPCTable& t)
 {
     if (GetBoolArg("-disablewallet", false))
