@@ -6333,6 +6333,102 @@ int CWallet::ExtKeySaveKey(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& k
     return 0;
 };
 
+int CWallet::ExtKeySaveKey(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& keyId, const CEKAKey& ak) const
+{
+    LogPrint("hdwallet", "%s %s %s.\n", __func__, sea->GetIDString58(), CDynamicAddress(keyId).ToString());
+    AssertLockHeld(cs_wallet);
+
+    size_t nChain = ak.nParent;
+    bool fUpdateAccTmp, fUpdateAcc = false;
+    if (GetBoolArg("-extkeysaveancestors", true)) {
+        LOCK(sea->cs_account);
+        AccKeyMap::const_iterator mi = sea->mapKeys.find(keyId);
+        if (mi != sea->mapKeys.end()) {
+            return false; // already saved
+        }
+
+        if (sea->mapLookAhead.erase(keyId) != 1) {
+            LogPrintf("%s -- Warning: SaveKey %s key not found in look ahead %s.\n", __func__, sea->GetIDString58(), CDynamicAddress(keyId).ToString());
+        }
+
+        sea->mapKeys[keyId] = ak;
+        if (0 != ExtKeyAppendToPack(pwdb, sea, keyId, ak, fUpdateAccTmp)) {
+            return errorN(1, "%s ExtKeyAppendToPack failed.", __func__);
+        }
+        fUpdateAcc = fUpdateAccTmp ? true : fUpdateAcc;
+
+        CStoredExtKey *pc;
+        if (!IsHardened(ak.nKey) && (pc = sea->GetChain(nChain)) != nullptr) {
+            if (ak.nKey == pc->nGenerated) {
+                pc->nGenerated++;
+            } else
+            if (pc->nGenerated < ak.nKey) {
+                uint32_t nOldGenerated = pc->nGenerated;
+                pc->nGenerated = ak.nKey + 1;
+
+                for (uint32_t i = nOldGenerated; i < ak.nKey; ++i) {
+                    uint32_t nChildOut = 0;
+                    CPubKey pk;
+                    if (0 != pc->DeriveKey(pk, i, nChildOut, false)) {
+                        LogPrintf("%s DeriveKey failed %d.\n", __func__, i);
+                        break;
+                    }
+
+                    CKeyID idkExtra = pk.GetID();
+                    if (sea->mapLookAhead.erase(idkExtra) != 1) {
+                        LogPrintf("%s -- Warning: SaveKey %s key not found in look ahead %s.\n", __func__, sea->GetIDString58(), CDynamicAddress(idkExtra).ToString());
+                    }
+
+                    CEKAKey akExtra(nChain, nChildOut);
+                    sea->mapKeys[idkExtra] = akExtra;
+                    if (0 != ExtKeyAppendToPack(pwdb, sea, idkExtra, akExtra, fUpdateAccTmp)) {
+                        return errorN(1, "%s ExtKeyAppendToPack failed.", __func__);
+                    }
+                    fUpdateAcc = fUpdateAccTmp ? true : fUpdateAcc;
+
+                    if (pc->nFlags & EAF_ACTIVE
+                        && pc->nFlags & EAF_RECEIVE_ON) {
+                        sea->AddLookAhead(nChain, 1);
+                    }
+                    LogPrint("hdwallet", "%s -- Saved key %s %d, %s.\n", __func__, sea->GetIDString58(), nChain, CDynamicAddress(idkExtra).ToString());
+                }
+            }
+            if (pc->nFlags & EAF_ACTIVE && pc->nFlags & EAF_RECEIVE_ON) {
+                sea->AddLookAhead(nChain, 1);
+            }
+            LogPrint("hdwallet", "%s -- Saved key %s %d, %s.\n", __func__, sea->GetIDString58(), nChain, CDynamicAddress(keyId).ToString());
+        }
+    } else {
+        if (!sea->SaveKey(keyId, ak)) {
+            return errorN(1, "%s SaveKey failed.", __func__);
+        }
+
+        if (0 != ExtKeyAppendToPack(pwdb, sea, keyId, ak, fUpdateAcc)) {
+            return errorN(1, "%s ExtKeyAppendToPack failed.", __func__);
+        }
+    }
+
+    // Save chain, nGenerated changed
+    CStoredExtKey *pc = sea->GetChain(nChain);
+    if (!pc) {
+        return errorN(1, "%s GetChain failed.", __func__);
+    }
+
+    CKeyID idChain = sea->vExtKeyIDs[nChain];
+    if (!pwdb->WriteExtKey(idChain, *pc)) {
+        return errorN(1, "%s WriteExtKey failed.", __func__);
+    }
+
+    if (fUpdateAcc) { // only necessary if nPack has changed
+        CKeyID idAccount = sea->GetID();
+        if (!pwdb->WriteExtAccount(idAccount, *sea)) {
+            return errorN(1, "%s WriteExtAccount failed.", __func__);
+        }
+    }
+
+    return 0;
+};
+
 bool CWallet::IndexStealthKey(CWalletDB* pwdb, uint160& hash, const CStealthAddressIndexed& sxi, uint32_t& id)
 {
     AssertLockHeld(cs_wallet);
@@ -7025,6 +7121,128 @@ int CWallet::PrepareLookahead()
     }
 
     return 0;
+};
+
+isminetype CWallet::HaveStealthKey(const CKeyID& address, const CEKAKey*& pak, const CEKASCKey*& pasc, CExtKeyAccount*& pa)
+{
+    AssertLockHeld(cs_wallet);
+
+    CWalletDB* pwdb = GetWalletDB();
+    if (!pwdb)
+        return ISMINE_NO;
+
+    pak = nullptr;
+    pasc = nullptr;
+    int rv;
+    ExtKeyAccountMap::const_iterator it;
+    for (it = mapExtAccounts.begin(); it != mapExtAccounts.end(); ++it) {
+        pa = it->second;
+        isminetype ismine = ISMINE_NO;
+        rv = pa->HaveKey(address, true, pak, pasc, ismine);
+        if (rv == HK_NO) {
+            continue;
+        }
+
+        if (rv == HK_LOOKAHEAD_DO_UPDATE) {
+            CEKAKey ak = *pak; // Must copy CEKAKey, ExtKeySaveKey modifies CExtKeyAccount
+            if (0 != ExtKeySaveKey(pwdb, pa, address, ak)) {
+                LogPrintf("%s: ExtKeySaveKey failed.\n", __func__);
+                return ISMINE_NO;
+            }
+        }
+        return ismine;
+    }
+
+    pa = nullptr;
+    return CCryptoKeyStore::IsMine(address);
+};
+
+isminetype CWallet::IsMyStealth(const CKeyID& address)
+{
+    LOCK(cs_wallet);
+
+    const CEKAKey *pak = nullptr;
+    const CEKASCKey *pasc = nullptr;
+    CExtKeyAccount *pa = nullptr;
+    return HaveStealthKey(address, pak, pasc, pa);
+};
+
+isminetype CWallet::IsMyStealth(const CStealthAddress& sxAddr, const CExtKeyAccount*& pa, const CEKAStealthKey*& pask)
+{
+    std::set<CStealthAddress>::const_iterator si = stealthAddresses.find(sxAddr);
+    if (si != stealthAddresses.end()) {
+        isminetype imSpend = IsMyStealth(si->spend_secret_id);
+        if (imSpend & ISMINE_SPENDABLE) {
+            return imSpend; // Retain ISMINE_HARDWARE_DEVICE flag if present
+        }
+        return ISMINE_WATCH_ONLY;
+    }
+
+    CKeyID sxId = CPubKey(sxAddr.scan_pubkey).GetID();
+
+    ExtKeyAccountMap::const_iterator mi;
+    for (mi = mapExtAccounts.begin(); mi != mapExtAccounts.end(); ++mi) {
+        CExtKeyAccount *ea = mi->second;
+
+        if (ea->mapStealthKeys.size() < 1) {
+            continue;
+        }
+        AccStealthKeyMap::const_iterator it = ea->mapStealthKeys.find(sxId);
+        if (it != ea->mapStealthKeys.end()) {
+            const CStoredExtKey *sek = ea->GetChain(it->second.akSpend.nParent);
+            if (sek) {
+                pa = ea;
+                pask = &it->second;
+                return sek->IsMine();
+            }
+            break;
+        }
+    }
+
+    return ISMINE_NO;
+};
+
+isminetype CWallet::HaveStealthAddress(const CStealthAddress& sxAddr)
+{
+    const CExtKeyAccount* pa;
+    const CEKAStealthKey* pask;
+    return IsMyStealth(sxAddr, pa, pask);
+}
+
+bool CWallet::ImportStealthAddress(const CStealthAddress& sxAddr, const CKey& skSpend)
+{
+    LogPrintf("%s: %s\n", __func__, sxAddr.Encoded());
+    
+    LOCK(cs_wallet);
+
+    // Must add before changing spend_secret
+    stealthAddresses.insert(sxAddr);
+
+    bool fOwned = skSpend.IsValid();
+
+    if (fOwned) {
+        // Owned addresses can only be added when wallet is unlocked
+        if (IsLocked()) {
+            stealthAddresses.erase(sxAddr);
+            return error("%s: Wallet must be unlocked.", __func__);
+        }
+
+        CPubKey pk = skSpend.GetPubKey();
+        if (!AddKeyPubKey(skSpend, pk)) {
+            stealthAddresses.erase(sxAddr);
+            return error("%s: AddKeyPubKey failed.", __func__);
+        }
+    }
+
+    CWalletDB* pwdb = GetWalletDB();
+    if (!pwdb)
+        return false;
+
+    if (!pwdb->WriteStealthAddress(sxAddr)) {
+        stealthAddresses.erase(sxAddr);
+        return error("%s: WriteStealthAddress failed.", __func__);
+    }
+    return true;
 };
 
 //! End add for stealth address transactions

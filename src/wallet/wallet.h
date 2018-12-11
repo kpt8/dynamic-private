@@ -1065,6 +1065,7 @@ public:
 
     CAmount GetDebit(const CTxIn& txin, const isminefilter& filter) const;
     isminetype IsMine(const CTxOut& txout) const;
+
     CAmount GetCredit(const CTxOut& txout, const isminefilter& filter) const;
     bool IsChange(const CTxOut& txout) const;
     CAmount GetChange(const CTxOut& txout) const;
@@ -1224,6 +1225,7 @@ public:
     int ExtKeyAppendToPack(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& idKey, const CEKAKey& ak, bool& fUpdateAcc) const;
     int ExtKeyAppendToPack(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& idKey, const CEKASCKey& asck, bool& fUpdateAcc) const;
     int ExtKeySaveKey(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& keyId, const CEKASCKey& asck) const;
+    int ExtKeySaveKey(CWalletDB* pwdb, CExtKeyAccount* sea, const CKeyID& keyId, const CEKAKey& ak) const;
     bool IndexStealthKey(CWalletDB* pwdb, uint160& hash, const CStealthAddressIndexed& sxi, uint32_t& id);
     bool UpdateStealthAddressIndex(const CKeyID& idK, const CStealthAddressIndexed& sxi, uint32_t& id);
     bool GetStealthAddressScanKey(CStealthAddress& sxAddr) const;
@@ -1238,6 +1240,11 @@ public:
     int ExtKeyLoadAccountPacks();
     int LoadStealthAddresses();
     int PrepareLookahead();
+    isminetype HaveStealthAddress(const CStealthAddress& sxAddr);
+    isminetype IsMyStealth(const CStealthAddress& sxAddr, const CExtKeyAccount*& pa, const CEKAStealthKey*& pask);
+    isminetype IsMyStealth(const CKeyID& address);
+    bool ImportStealthAddress(const CStealthAddress& sxAddr, const CKey& skSpend);
+    isminetype HaveStealthKey(const CKeyID& address, const CEKAKey*& pak, const CEKASCKey*& pasc, CExtKeyAccount*& pa);
     //! End add for stealth address transactions
 };
 
