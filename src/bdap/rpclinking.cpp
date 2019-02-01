@@ -5,6 +5,7 @@
 #include "bdap/bdap.h"
 #include "bdap/domainentry.h"
 #include "bdap/domainentrydb.h"
+#include "bdap/encryption/encryption.h"
 #include "bdap/linking.h"
 #include "bdap/linkingdb.h"
 #include "bdap/utils.h"
@@ -202,12 +203,37 @@ static UniValue SendLinkRequest(const JSONRPCRequest& request)
     if (!txLink.ValidateValues(strMessage))
         throw std::runtime_error("BDAP_SEND_LINK_RPC_ERROR: ERRCODE: 4010 - Error validating link request values: " + strMessage);
 
-    // TODO (bdap): encrypt data before adding it to OP_RETURN.
-    // Create BDAP OP_RETURN script
-    CharString data;
+    // Serialize link class into a raw vector
+    std::vector<unsigned char> data;
     txLink.Serialize(data);
+
+    // Encrypt serialized data for the sender and recipient
+    strMessage = "";
+    std::vector<std::vector<unsigned char>> vvchPubKeys;
+    vvchPubKeys.push_back(vchDHTPubKey);
+    vvchPubKeys.push_back(vchSharedPubKey);
+    std::vector<unsigned char> dataEncrypted;
+    if (!EncryptBDAPData(vvchPubKeys, data, dataEncrypted, strMessage))
+        throw std::runtime_error("BDAP_SEND_LINK_RPC_ERROR: ERRCODE: 4011 - Error encrypting link data: " + strMessage);
+
+    // Test link data decryption 
+    strMessage = "";
+    std::vector<unsigned char> dataDecrypted;
+    if (!DecryptBDAPData(privReqDHTKey.GetPrivSeed(), dataEncrypted, dataDecrypted, strMessage))
+        throw std::runtime_error("BDAP_SEND_LINK_RPC_ERROR: ERRCODE: 4012 - Error decrypting link data: " + strMessage);
+
+    // Create BDAP OP_RETURN script
     CScript scriptData;
-    scriptData << OP_RETURN << data;
+    scriptData << OP_RETURN << dataDecrypted;
+
+    // Test deserialize the data
+    std::vector<unsigned char> vchData, vchHash;
+    if (!GetBDAPData(scriptData, vchData, vchHash))
+        throw std::runtime_error("BDAP_SEND_LINK_RPC_ERROR: ERRCODE: 4013 - Error getting link data: " + strMessage);
+
+    CLinkRequest txLinkTest;
+    txLinkTest.UnserializeFromData(vchData, vchHash);
+    // End test link data decryption 
 
     // Send the transaction
     CWalletTx wtx;
@@ -227,7 +253,7 @@ static UniValue SendLinkRequest(const JSONRPCRequest& request)
 
     UniValue oLink(UniValue::VOBJ);
     if(!BuildJsonLinkRequestInfo(txLink, entryRequestor, entryRecipient, oLink))
-        throw std::runtime_error("BDAP_SEND_LINK_RPC_ERROR: ERRCODE: 4011 - " + _("Failed to build BDAP link JSON object"));
+        throw std::runtime_error("BDAP_SEND_LINK_RPC_ERROR: ERRCODE: 4012 - " + _("Failed to build BDAP link JSON object"));
 
     return oLink;
 }
