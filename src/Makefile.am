@@ -82,6 +82,24 @@ DYNAMIC_CORE_H = \
   bdap/domainentry.h \
   bdap/domainentrydb.h \
   bdap/certificate.h \
+  bdap/encryption/aes256.h \
+  bdap/encryption/aes256ctr.h \
+  bdap/encryption/aes256gcm.h \
+  bdap/encryption/curve25519.h \
+  bdap/encryption/ed25519.h \
+  bdap/encryption/encryption.h \
+  bdap/encryption/encryption_core.h \
+  bdap/encryption/encryption_error.h \
+  bdap/encryption/ed25519.h \
+  bdap/encryption/fe.h \
+  bdap/encryption/fe_25_5.h \
+  bdap/encryption/ge.h \
+  bdap/encryption/os_rand.h \
+  bdap/encryption/rand.h \
+  bdap/encryption/sha512.h \
+  bdap/encryption/shake256.h \
+  bdap/encryption/shake256_rand.h \
+  bdap/encryption/utils.h \
   bdap/entrycheckpoints.h \
   bdap/identity.h \
   bdap/linking.h \
@@ -122,7 +140,6 @@ DYNAMIC_CORE_H = \
   core_memusage.h \
   cuckoocache.h \
   dbwrapper.h \
-  dht/curve25519.h \
   dht/ed25519.h \
   dht/mutable.h \
   dht/mutabledb.h \
@@ -274,6 +291,23 @@ libdynamic_server_a_SOURCES = \
   bdap/domainentry.cpp \
   bdap/domainentrydb.cpp \
   bdap/certificate.cpp \
+  bdap/encryption/aes256.cpp \
+  bdap/encryption/aes256ctr.cpp \
+  bdap/encryption/aes256gcm.cpp \
+  bdap/encryption/curve25519.cpp \
+  bdap/encryption/ed25519.cpp \
+  bdap/encryption/encryption.cpp \
+  bdap/encryption/encryption_core.cpp \
+  bdap/encryption/encryption_error.cpp \
+  bdap/encryption/ed25519.cpp \
+  bdap/encryption/fe.cpp \
+  bdap/encryption/ge.cpp \
+  bdap/encryption/os_rand.cpp \
+  bdap/encryption/rand.cpp \
+  bdap/encryption/sha512.cpp \
+  bdap/encryption/shake256.cpp \
+  bdap/encryption/shake256_rand.cpp \
+  bdap/encryption/utils.cpp \
   bdap/entrycheckpoints.cpp \
   bdap/identity.cpp \
   bdap/linking.cpp \
@@ -284,7 +318,6 @@ libdynamic_server_a_SOURCES = \
   bdap/sidechain.cpp \
   bdap/utils.cpp \
   dbwrapper.cpp \
-  dht/curve25519.cpp \
   dht/mutable.cpp \
   dht/mutabledb.cpp \
   dht/operations.cpp \
