@@ -1,6 +1,4 @@
-
 #include "encryption.h"
-
 #include "encryption_core.h"
 
 #include <cstdint>
@@ -55,6 +53,9 @@ bool EncryptBDAPData(const vCharVector& vchPubKeys,
         publicKeys[index] = vchPubKeys[index].data();
     }
 
+    size_t ciphertextSize = BDAPCiphertextSize(numRecipients, vchData.size());
+    vchCipherText.resize(ciphertextSize);
+
     const char *error_message;
     status = bdap_encrypt(vchCipherText.data(),
                           numRecipients,
@@ -85,6 +86,9 @@ bool DecryptBDAPData(const CharVector& vchPrivKeySeed,
                      std::string& strErrorMessage)
 {
     bool status = false;
+
+    size_t expectedDecryptedSize = BDAPExpectedDecryptedSize(vchCipherText);
+    vchData.resize(expectedDecryptedSize);
 
     const char *error_message;
     status = bdap_decrypt(vchData.data(),
