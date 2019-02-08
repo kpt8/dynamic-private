@@ -357,7 +357,7 @@ static bool CommonDataCheck(const CDomainEntry& entry, const vchCharString& vvch
 }
 
 bool CheckNewDomainEntryTxInputs(const CDomainEntry& entry, const CScript& scriptOp, const vchCharString& vvchOpParameters,
-                               std::string& errorMessage, bool fJustCheck)
+                            std::string& errorMessage, bool fJustCheck)
 {
     if (!CommonDataCheck(entry, vvchOpParameters, errorMessage))
         return error(errorMessage.c_str());
@@ -365,25 +365,31 @@ bool CheckNewDomainEntryTxInputs(const CDomainEntry& entry, const CScript& scrip
     if (fJustCheck)
         return true;
 
+    bool fNewAccount = true;
     CDomainEntry getDomainEntry;
     if (GetDomainEntry(entry.vchFullObjectPath(), getDomainEntry))
     {
-        errorMessage = "CheckNewDomainEntryTxInputs: - The entry " + getDomainEntry.GetFullObjectPath() + " already exists.  Add new entry failed!";
-        return error(errorMessage.c_str());
+        LogPrintf("%s -- The %s account already exists in local leveldb database.\n", __func__, getDomainEntry.GetFullObjectPath());
+        if (getDomainEntry != entry) {
+            errorMessage = "CheckNewDomainEntryTxInputs: - The entry " + getDomainEntry.GetFullObjectPath() + " is already taken. Can not create a duplicate account entry. Add new entry failed!";
+            LogPrintf("%s -- %s\n", __func__, errorMessage);
+            return error(errorMessage.c_str());
+        }
+        fNewAccount = false; // we already have this account stored locally.  Do not try to add it again.
     }
-
-    if (!pDomainEntryDB)
-    {
-        errorMessage = "CheckNewDomainEntryTxInputs failed! Can not open LevelDB BDAP entry database.";
-        return error(errorMessage.c_str());
+    if (fNewAccount) {
+        if (!pDomainEntryDB)
+        {
+            errorMessage = "CheckNewDomainEntryTxInputs failed! Can not open LevelDB BDAP entry database.";
+            return error(errorMessage.c_str());
+        }
+        int op = OP_BDAP_NEW;
+        if (!pDomainEntryDB->AddDomainEntry(entry, op))
+        {
+            errorMessage = "CheckNewDomainEntryTxInputs failed! Error adding new entry entry request to LevelDB.";
+            return error(errorMessage.c_str());
+        }
     }
-    int op = OP_BDAP_NEW;
-    if (!pDomainEntryDB->AddDomainEntry(entry, op))
-    {
-        errorMessage = "CheckNewDomainEntryTxInputs failed! Error adding new entry entry request to LevelDB.";
-        return error(errorMessage.c_str());
-    }
-
     return FlushLevelDB();
 }
 
@@ -401,7 +407,8 @@ bool CheckDeleteDomainEntryTxInputs(const CDomainEntry& entry, const CScript& sc
     if (!GetDomainEntry(entry.vchFullObjectPath(), prevDomainEntry))
     {
         errorMessage = "CheckDeleteDomainEntryTxInputs: - Can not find " + prevDomainEntry.GetFullObjectPath() + " entry; this delete operation failed!";
-        return error(errorMessage.c_str());
+        LogPrintf("%s -- %s\n", __func__, errorMessage);
+        return true; // Not a consensus level error but we do not want to process any further
     }
 
     CTxDestination bdapDest;
@@ -415,8 +422,9 @@ bool CheckDeleteDomainEntryTxInputs(const CDomainEntry& entry, const CScript& sc
         CTransactionRef prevTx = MakeTransactionRef();
         uint256 hashBlock;
         if (!GetTransaction(prevDomainEntry.txHash, prevTx, Params().GetConsensus(), hashBlock, true)) {
-            errorMessage = "CheckDeleteDomainEntryTxInputs: - " + _("Cannot extract previous transaction from BDAP output; this delete operation failed!");
-            return error(errorMessage.c_str());
+            //errorMessage = "CheckDeleteDomainEntryTxInputs: - " + _("Cannot extract previous transaction from BDAP output; this delete operation failed!");
+            LogPrintf("%s --  GetTransaction failed. Not a consensus level error but we do not want to process any further.\n", __func__);
+            return true; // Not a consensus level error but we do not want to process any further
         }
         // Get current wallet address used for BDAP tx
         CDynamicAddress txAddress = GetScriptAddress(scriptOp);
@@ -455,7 +463,8 @@ bool CheckUpdateDomainEntryTxInputs(const CDomainEntry& entry, const CScript& sc
     if (!GetDomainEntry(entry.vchFullObjectPath(), prevDomainEntry))
     {
         errorMessage = "CheckUpdateDomainEntryTxInputs: - Can not find " + prevDomainEntry.GetFullObjectPath() + " entry; this update operation failed!";
-        return error(errorMessage.c_str());
+        LogPrintf("%s -- %s\n", __func__, errorMessage);
+        return true; // Not a consensus level error but we do not want to process any further
     }
 
     CTxDestination bdapDest;
@@ -469,8 +478,9 @@ bool CheckUpdateDomainEntryTxInputs(const CDomainEntry& entry, const CScript& sc
         CTransactionRef prevTx = MakeTransactionRef();
         uint256 hashBlock;
         if (!GetTransaction(prevDomainEntry.txHash, prevTx, Params().GetConsensus(), hashBlock, true)) {
-            errorMessage = "CheckUpdateDomainEntryTxInputs: - " + _("Cannot extract previous transaction from BDAP output; this update operation failed!");
-            return error(errorMessage.c_str());
+            //errorMessage = "CheckUpdateDomainEntryTxInputs: - " + _("Cannot extract previous transaction from BDAP output; this update operation failed!");
+            LogPrintf("%s --  GetTransaction failed. Not a consensus level error but we do not want to process any further.\n", __func__);
+            return true; // Not a consensus level error but we do not want to process any further
         }
         // Get current wallet address used for BDAP tx
         CDynamicAddress txAddress = GetScriptAddress(scriptOp);
@@ -537,11 +547,11 @@ bool CheckDomainEntryTx(const CTransactionRef& tx, const CScript& scriptOp, cons
 {
     if (tx->IsCoinBase() && !fJustCheck && !bSanityCheck)
     {
-        LogPrintf("*Trying to add BDAP entry in coinbase transaction, skipping...");
+        LogPrintf("%s -- Trying to add BDAP entry in coinbase transaction, skipping...", __func__);
         return true;
     }
 
-    LogPrintf("%s -- *** BDAP nHeight=%d, chainActive.Tip()=%d, op1=%s, op2=%s, hash=%s justcheck=%s\n", __func__, nHeight, chainActive.Tip()->nHeight, BDAPFromOp(op1).c_str(), BDAPFromOp(op2).c_str(), tx->GetHash().ToString().c_str(), fJustCheck ? "JUSTCHECK" : "BLOCK");
+    LogPrint("bdap", "%s -- *** BDAP nHeight=%d, chainActive.Tip()=%d, op1=%s, op2=%s, hash=%s justcheck=%s\n", __func__, nHeight, chainActive.Tip()->nHeight, BDAPFromOp(op1).c_str(), BDAPFromOp(op2).c_str(), tx->GetHash().ToString().c_str(), fJustCheck ? "JUSTCHECK" : "BLOCK");
     
     // unserialize BDAP from txn, check if the entry is valid and does not conflict with a previous entry
     CDomainEntry entry;
