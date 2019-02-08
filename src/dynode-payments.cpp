@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Duality Blockchain Solutions Developers
+// Copyright (c) 2016-2019 Duality Blockchain Solutions Developers
 // Copyright (c) 2014-2017 The Dash Core Developers
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
@@ -12,6 +12,7 @@
 #include "dynodeman.h"
 #include "fluid/fluiddb.h"
 #include "governance-classes.h"
+#include "init.h"
 #include "key_io.h"
 #include "messagesigner.h"
 #include "netfulfilledman.h"
@@ -695,7 +696,7 @@ void CDynodePayments::CheckAndRemove()
             ++it;
         }
     }
-    LogPrintf("CDynodePayments::CheckAndRemove -- %s\n", ToString());
+    LogPrint("dnpayments", "CDynodePayments::CheckAndRemove -- %s\n", ToString());
 }
 
 bool CDynodePaymentVote::IsValid(CNode* pnode, int nValidationHeight, std::string& strError, CConnman& connman) const
@@ -785,7 +786,7 @@ bool CDynodePayments::ProcessBlock(int nBlockHeight, CConnman& connman)
 
     // LOCATE THE NEXT DYNODE WHICH SHOULD BE PAID
 
-    LogPrintf("CDynodePayments::ProcessBlock -- Start: nBlockHeight=%d, dynode=%s\n", nBlockHeight, activeDynode.outpoint.ToStringShort());
+    LogPrint("dnpayments", "CDynodePayments::ProcessBlock -- Start: nBlockHeight=%d, dynode=%s\n", nBlockHeight, activeDynode.outpoint.ToStringShort());
 
     // pay to the oldest DN that still had no payment but its input is old enough and it was active long enough
     int nCount = 0;
@@ -796,7 +797,7 @@ bool CDynodePayments::ProcessBlock(int nBlockHeight, CConnman& connman)
         return false;
     }
 
-    LogPrintf("CDynodePayments::ProcessBlock -- Dynode found by GetNextDynodeInQueueForPayment(): %s\n", dnInfo.outpoint.ToStringShort());
+    LogPrint("dnpayments", "CDynodePayments::ProcessBlock -- Dynode found by GetNextDynodeInQueueForPayment(): %s\n", dnInfo.outpoint.ToStringShort());
 
     CScript payee = GetScriptForDestination(dnInfo.pubKeyCollateralAddress.GetID());
 
@@ -806,13 +807,13 @@ bool CDynodePayments::ProcessBlock(int nBlockHeight, CConnman& connman)
     ExtractDestination(payee, address1);
     CDynamicAddress address2(address1);
 
-    LogPrintf("CDynodePayments::ProcessBlock -- vote: payee=%s, nBlockHeight=%d\n", address2.ToString(), nBlockHeight);
+    LogPrint("dnpayments", "CDynodePayments::ProcessBlock -- vote: payee=%s, nBlockHeight=%d\n", address2.ToString(), nBlockHeight);
 
     // SIGN MESSAGE TO NETWORK WITH OUR DYNODE KEYS
 
-    LogPrintf("CDynodePayments::ProcessBlock -- Signing vote\n");
+    LogPrint("dnpayments", "CDynodePayments::ProcessBlock -- Signing vote\n");
     if (voteNew.Sign()) {
-        LogPrintf("CDynodePayments::ProcessBlock -- AddPaymentVote()\n");
+        LogPrint("dnpayments", "CDynodePayments::ProcessBlock -- AddPaymentVote()\n");
 
         if (AddOrUpdatePaymentVote(voteNew)) {
             voteNew.Relay(connman);
@@ -1011,7 +1012,7 @@ void CDynodePayments::RequestLowDataPaymentBlocks(CNode* pnode, CConnman& connma
             vToFetch.push_back(CInv(MSG_DYNODE_PAYMENT_BLOCK, pindex->GetBlockHash()));
             // We should not violate GETDATA rules
             if (vToFetch.size() == MAX_INV_SZ) {
-                LogPrintf("CDynodePayments::SyncLowDataPaymentBlocks -- asking peer %d for %d blocks\n", pnode->id, MAX_INV_SZ);
+                LogPrint("dnpayments", "CDynodePayments::SyncLowDataPaymentBlocks -- asking peer %d for %d blocks\n", pnode->id, MAX_INV_SZ);
                 connman.PushMessage(pnode, msgMaker.Make(NetMsgType::GETDATA, vToFetch));
                 // Start filling new batch
                 vToFetch.clear();
@@ -1057,7 +1058,7 @@ void CDynodePayments::RequestLowDataPaymentBlocks(CNode* pnode, CConnman& connma
         }
         // We should not violate GETDATA rules
         if (vToFetch.size() == MAX_INV_SZ) {
-            LogPrintf("CDynodePayments::SyncLowDataPaymentBlocks -- asking peer %d for %d payment blocks\n", pnode->id, MAX_INV_SZ);
+            LogPrint("dnpayments", "CDynodePayments::SyncLowDataPaymentBlocks -- asking peer %d for %d payment blocks\n", pnode->id, MAX_INV_SZ);
             connman.PushMessage(pnode, msgMaker.Make(NetMsgType::GETDATA, vToFetch));
             // Start filling new batch
             vToFetch.clear();
@@ -1065,7 +1066,7 @@ void CDynodePayments::RequestLowDataPaymentBlocks(CNode* pnode, CConnman& connma
     }
     // Ask for the rest of it
     if (!vToFetch.empty()) {
-        LogPrintf("CDynodePayments::SyncLowDataPaymentBlocks -- asking peer %d for %d payment blocks\n", pnode->id, vToFetch.size());
+        LogPrint("dnpayments", "CDynodePayments::SyncLowDataPaymentBlocks -- asking peer %d for %d payment blocks\n", pnode->id, vToFetch.size());
         connman.PushMessage(pnode, msgMaker.Make(NetMsgType::GETDATA, vToFetch));
     }
 }
@@ -1103,4 +1104,10 @@ void CDynodePayments::UpdatedBlockTip(const CBlockIndex* pindex, CConnman& connm
 
     CheckBlockVotes(nFutureBlock - 1);
     ProcessBlock(nFutureBlock, connman);
+}
+
+void CDynodePayments::DoMaintenance()
+{
+    if (ShutdownRequested()) return;
+     CheckAndRemove();
 }

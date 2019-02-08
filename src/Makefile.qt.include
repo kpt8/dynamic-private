@@ -12,6 +12,7 @@ QT_TS = \
   qt/locale/dynamic_it.ts \
   qt/locale/dynamic_ja.ts \
   qt/locale/dynamic_ko.ts \
+  qt/locale/dynamic_nl.ts \
   qt/locale/dynamic_pl.ts \
   qt/locale/dynamic_pt.ts \
   qt/locale/dynamic_ru.ts \
@@ -31,6 +32,7 @@ QT_FORMS_UI = \
   qt/forms/intro.ui \
   qt/forms/miningpage.ui \
   qt/forms/modaloverlay.ui \
+  qt/forms/mnemonicdialog.ui \
   qt/forms/openuridialog.ui \
   qt/forms/optionsdialog.ui \
   qt/forms/overviewpage.ui \
@@ -64,6 +66,7 @@ QT_MOC_CPP = \
   qt/moc_macdockiconhandler.cpp \
   qt/moc_macnotificationhandler.cpp \
   qt/moc_miningpage.cpp \
+  qt/moc_mnemonicdialog.cpp \
   qt/moc_modaloverlay.cpp \
   qt/moc_notificator.cpp \
   qt/moc_openuridialog.cpp \
@@ -136,6 +139,7 @@ DYNAMIC_QT_H = \
   qt/macdockiconhandler.h \
   qt/macnotificationhandler.h \
   qt/miningpage.h \
+  qt/mnemonicdialog.h \
   qt/modaloverlay.h \
   qt/networkstyle.h \
   qt/notificator.h \
@@ -181,6 +185,7 @@ RES_ICONS = \
   qt/res/icons/drk/about_qt.png \
   qt/res/icons/drk/add.png \
   qt/res/icons/drk/address-book.png \
+  qt/res/icons/drk/bdap.png \
   qt/res/icons/drk/browse.png \
   qt/res/icons/drk/chevron.png \
   qt/res/icons/drk/clock1.png \
@@ -283,6 +288,7 @@ DYNAMIC_QT_CPP += \
   qt/editaddressdialog.cpp \
   qt/hashrategraphwidget.cpp \
   qt/miningpage.cpp \
+  qt/mnemonicdialog.cpp \
   qt/openuridialog.cpp \
   qt/overviewpage.cpp \
   qt/paymentrequestplus.cpp \

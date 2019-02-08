@@ -1,19 +1,24 @@
-// Copyright (c) 2016-2018 Duality Blockchain Solutions Developers
-// Copyright (c) 2017-2018 The Particl Core developers
-// Copyright (c) 2014-2018 The Dash Core Developers
-// Copyright (c) 2009-2018 The Bitcoin Developers
-// Copyright (c) 2009-2018 Satoshi Nakamoto
+// Copyright (c) 2016-2019 Duality Blockchain Solutions Developers
+// Copyright (c) 2017-2019 The Particl Core developers
+// Copyright (c) 2014-2019 The Dash Core Developers
+// Copyright (c) 2009-2019 The Bitcoin Developers
+// Copyright (c) 2009-2019 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "wallet/wallet.h"
 
+#include "base58.h"
+#include "bdap/bdap.h"
 #include "bdap/domainentrydb.h"
+#include "bdap/linkingdb.h"
+#include "bdap/utils.h"
 #include "chain.h"
 #include "checkpoints.h"
 #include "consensus/consensus.h"
 #include "consensus/validation.h"
 #include "crypto/crypter.h"
+#include "encryption.h" // for VGP E2E encryption
 #include "fluid/fluid.h"
 #include "governance.h"
 #include "init.h"
@@ -90,14 +95,14 @@ std::string COutput::ToString() const
 
 int COutput::Priority() const
 {
-    for (const auto& d : CPrivateSend::GetStandardDenominations())
-        if (tx->tx->vout[i].nValue == d)
-            return 10000;
-    if (tx->tx->vout[i].nValue < 1 * COIN)
-        return 20000;
+    for (const auto& d : CPrivateSend::GetStandardDenominations()) {
+        // large denoms have lower value
+        if(tx->tx->vout[i].nValue == d) return (float)COIN / d * 10000;
+    }
+    if(tx->tx->vout[i].nValue < 1*COIN) return 20000;
 
     //nondenom return largest first
-    return -(tx->tx->vout[i].nValue / COIN);
+    return -(tx->tx->vout[i].nValue/COIN);
 }
 
 const CWalletTx* CWallet::GetWalletTx(const uint256& hash) const
@@ -202,6 +207,27 @@ void CWallet::DeriveNewChildKey(const CKeyMetadata& metadata, CKey& secretRet, u
 
     if (!AddHDPubKey(childKey.Neutered(), fInternal))
         throw std::runtime_error(std::string(__func__) + ": AddHDPubKey failed");
+}
+
+void CWallet::DeriveNewChildKeyBIP44BychainChildKey(CExtKey& chainChildKey, CKey& secret, bool internal, uint32_t* nInternalChainCounter, uint32_t* nExternalChainCounter)
+{
+    CExtKey childKey;              //key at m/0'/0'/<n>'
+     // derive child key at next index, skip keys already known to the wallet
+    
+    // always derive hardened keys
+    // childIndex | BIP32_HARDENED_KEY_LIMIT = derive childIndex in hardened child-index-range
+    // example: 1 | BIP32_HARDENED_KEY_LIMIT == 0x80000001 == 2147483649
+    if (internal) {
+        chainChildKey.Derive(childKey, *nInternalChainCounter);
+        //metadata.hdKeypath = "m/44'/0'/0'/1/" + std::to_string(hdChain.nInternalChainCounter);
+        (*nInternalChainCounter)++;
+    }
+    else {
+        chainChildKey.Derive(childKey, *nExternalChainCounter);
+        //metadata.hdKeypath = "m/44'/0'/0'/0/" + std::to_string(hdChain.nExternalChainCounter);
+        (*nExternalChainCounter)++;
+    }
+    secret = childKey.key;
 }
 
 bool CWallet::GetPubKey(const CKeyID& address, CPubKey& vchPubKeyOut) const
@@ -1165,7 +1191,7 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFlushOnClose)
     }
 
     //// debug print
-    LogPrintf("AddToWallet %s  %s%s\n", wtxIn.GetHash().ToString(), (fInsertedNew ? "new" : ""), (fUpdated ? "update" : ""));
+    LogPrint("wallet", "AddToWallet %s  %s%s\n", wtxIn.GetHash().ToString(), (fInsertedNew ? "new" : ""), (fUpdated ? "update" : ""));
 
     // Write to disk
     if (fInsertedNew || fUpdated)
@@ -1213,6 +1239,38 @@ bool CWallet::LoadToWallet(const CWalletTx& wtxIn)
     return true;
 }
 
+bool CWallet::IsLinkFromMe(const std::vector<unsigned char>& vchLinkPubKey)
+{
+    CKeyID keyID(Hash160(vchLinkPubKey.begin(), vchLinkPubKey.end()));
+    CKeyEd25519 keyOut;
+    if (GetDHTKey(keyID, keyOut))
+        return true;
+
+    return false;
+}
+
+bool CWallet::IsLinkForMe(const std::vector<unsigned char>& vchLinkPubKey, const std::vector<unsigned char>& vchSharedPubKey)
+{
+    std::vector<std::vector<unsigned char>> vvchMyDHTPubKeys;
+    if (!GetDHTPubKeys(vvchMyDHTPubKeys) )
+        return false;
+
+    if (vvchMyDHTPubKeys.size() == 0)
+        return false;
+
+    for (const std::vector<unsigned char>& vchMyDHTPubKey : vvchMyDHTPubKeys) {
+        CKeyID keyID(Hash160(vchMyDHTPubKey.begin(), vchMyDHTPubKey.end()));
+        CKeyEd25519 dhtKey;
+        if (GetDHTKey(keyID, dhtKey)) {
+            std::vector<unsigned char> vchGetSharedPubKey = GetLinkSharedPubKey(dhtKey, vchLinkPubKey);
+            if (vchGetSharedPubKey == vchSharedPubKey)
+                return true;
+        }
+    }
+
+    return false;
+}
+
 /**
  * Add a transaction to the wallet, or update it.  pIndex and posInBlock should
  * be set when the transaction was known to be included in a block.  When
@@ -1249,11 +1307,249 @@ bool CWallet::AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlockIndex
         if (fExisted && !fUpdate)
             return false;
 
+
         mapValue_t mapNarr;
         bool fIsMyStealth = ScanForOwnedOutputs(tx, mapNarr);
 
         if (fExisted || IsMine(tx) || IsFromMe(tx) || fIsMyStealth) {
-            CWalletTx wtx(this, MakeTransactionRef(tx));
+            const CTransactionRef ptx = MakeTransactionRef(tx);
+            if (tx.nVersion == BDAP_TX_VERSION) {
+                CScript bdapOpScript;
+                int op1, op2;
+                std::vector<std::vector<unsigned char>> vvchOpParameters;
+                if (GetBDAPOpScript(ptx, bdapOpScript, vvchOpParameters, op1, op2)) {
+                    std::string strOpType = GetBDAPOpTypeString(op1, op2);
+                    if (strOpType == "bdap_new_link_request" && vvchOpParameters.size() > 1) {
+                        std::vector<unsigned char> vchLinkPubKey = vvchOpParameters[0];
+                        // Check to see if this link request is from one of my BDAP accounts.
+                        {
+                            bool fIsLinkRequestFromMe = IsLinkFromMe(vchLinkPubKey);
+                            if (fIsLinkRequestFromMe) {
+                                int nOut;
+                                std::vector<unsigned char> vchData, vchHash;
+                                if (GetBDAPData(ptx, vchData, vchHash, nOut)) {
+                                    int nVersion = GetLinkVersionFromData(vchData);
+                                    if (nVersion == 0) {
+                                        if (nVersion == 0) { // version 0 is public and unencrypted
+                                            CLinkRequest link(MakeTransactionRef(tx));
+                                            CDomainEntry entry;
+                                            if (GetDomainEntry(link.RequestorFullObjectPath, entry)) {
+                                                if (SignatureProofIsValid(entry.GetWalletAddress(), link.RecipientFQDN(), link.SignatureProof)) {
+                                                    LogPrint("bdap", "%s -- Link request from me found with a valid signature proof. Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                                    pLinkRequestDB->AddMyLinkRequest(link);
+                                                }
+                                                else
+                                                    LogPrintf("%s ***** Warning. Link request from me found with an invalid signature proof! Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                            }
+                                        }
+                                    }
+                                    else if (nVersion == 1) {
+                                        //TODO (bdap): If version 1 or above, decrypt vchData before serialized to a class object
+                                        bool fDecrypted = false;
+                                        LogPrint("bdap", "%s -- Version 1 link request for me found! vchLinkPubKey = %s\n", __func__, stringFromVch(vchLinkPubKey));
+                                        CKeyEd25519 privDHTKey;
+                                        CKeyID keyID(Hash160(vchLinkPubKey.begin(), vchLinkPubKey.end()));
+                                        if (GetDHTKey(keyID, privDHTKey)) {
+                                            int nDataVersion;
+                                            LogPrint("bdap", "%s --  Encrypted data size = %i\n", __func__, vchData.size());
+                                            vchData = RemoveVersionFromLinkData(vchData, nDataVersion);
+                                            if (nDataVersion == nVersion) {
+                                                std::string strMessage = "";
+                                                std::vector<unsigned char> dataDecrypted;
+                                                if (DecryptBDAPData(privDHTKey.GetPrivSeedBytes(), vchData, dataDecrypted, strMessage)) {
+                                                    std::vector<unsigned char> vchData, vchHash;
+                                                    CScript scriptData;
+                                                    scriptData << OP_RETURN << dataDecrypted;
+                                                    if (GetBDAPData(scriptData, vchData, vchHash)) {
+                                                        CLinkRequest link;
+                                                        link.UnserializeFromData(dataDecrypted, vchHash);
+                                                        pLinkRequestDB->AddMyLinkRequest(link);
+                                                        LogPrint("bdap", "%s -- DecryptBDAPData RequestorFQDN = %s, RecipientFQDN = %s, dataDecrypted size = %i\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), dataDecrypted.size());
+                                                        fDecrypted = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (!fDecrypted)
+                                            LogPrint("bdap", "%s -- Link request DecryptBDAPData failed.\n", __func__);
+                                    }
+                                }
+                            }
+                        }
+                        // Check to see if this link request is for one of my BDAP accounts.
+                        {
+                            std::vector<unsigned char> vchSharedPubKey = vvchOpParameters[1];
+                            bool fIsLinkRequestForMe = IsLinkForMe(vchLinkPubKey, vchSharedPubKey);
+                            if (fIsLinkRequestForMe) {
+                                int nOut;
+                                std::vector<unsigned char> vchData, vchHash;
+                                if (GetBDAPData(ptx, vchData, vchHash, nOut)) {
+                                    int nVersion = GetLinkVersionFromData(vchData);
+                                    if (nVersion == 0) {
+                                        if (nVersion == 0) { // version 0 is public and unencrypted
+                                            CLinkRequest link(MakeTransactionRef(tx));
+                                            CDomainEntry entry;
+                                            if (GetDomainEntry(link.RequestorFullObjectPath, entry)) {
+                                                if (SignatureProofIsValid(entry.GetWalletAddress(), link.RecipientFQDN(), link.SignatureProof)) {
+                                                    LogPrint("bdap", "%s -- Link request for me found with a valid signature proof. Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                                    pLinkRequestDB->AddMyLinkRequest(link);
+                                                }
+                                                else
+                                                    LogPrintf("%s -- ***** Alert. Link request for me found with an invalid signature proof! Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                            }
+                                        }
+                                    }
+                                    else if (nVersion == 1) {
+                                        //TODO (bdap): If version 1 or above, decrypt vchData before serialized to a class object
+                                        bool fDecrypted = false;
+                                        LogPrint("bdap", "%s -- Version 1 link request for me found! vchLinkPubKey = %s\n", __func__, stringFromVch(vchLinkPubKey));
+                                        CKeyEd25519 privDHTKey;
+                                        CKeyID keyID(Hash160(vchLinkPubKey.begin(), vchLinkPubKey.end()));
+                                        if (GetDHTKey(keyID, privDHTKey)) {
+                                            int nDataVersion;
+                                            LogPrint("bdap", "%s --  Encrypted data size = %i\n", __func__, vchData.size());
+                                            vchData = RemoveVersionFromLinkData(vchData, nDataVersion);
+                                            if (nDataVersion == nVersion) {
+                                                std::string strMessage = "";
+                                                std::vector<unsigned char> dataDecrypted;
+                                                if (DecryptBDAPData(privDHTKey.GetPrivSeedBytes(), vchData, dataDecrypted, strMessage)) {
+                                                    std::vector<unsigned char> vchData, vchHash;
+                                                    CScript scriptData;
+                                                    scriptData << OP_RETURN << dataDecrypted;
+                                                    if (GetBDAPData(scriptData, vchData, vchHash)) {
+                                                        CLinkRequest link;
+                                                        link.UnserializeFromData(dataDecrypted, vchHash);
+                                                        pLinkRequestDB->AddMyLinkRequest(link);
+                                                        LogPrint("bdap", "%s -- DecryptBDAPData RequestorFQDN = %s, RecipientFQDN = %s, dataDecrypted size = %i\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), dataDecrypted.size());
+                                                        fDecrypted = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (!fDecrypted)
+                                            LogPrint("bdap", "%s -- Link request DecryptBDAPData failed.\n", __func__);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else if (strOpType == "bdap_new_link_accept" && vvchOpParameters.size() > 1) {
+                        std::vector<unsigned char> vchLinkPubKey = vvchOpParameters[0];
+                        // Check to see if this link accept is from one of my BDAP accounts.
+                        {
+                            bool fIsLinkAcceptFromMe = IsLinkFromMe(vchLinkPubKey);
+                            if (fIsLinkAcceptFromMe) {
+                                int nOut;
+                                std::vector<unsigned char> vchData, vchHash;
+                                if (GetBDAPData(ptx, vchData, vchHash, nOut)) {
+                                    int nVersion = GetLinkVersionFromData(vchData);
+                                    if (nVersion == 0) {
+                                        if (nVersion == 0) { // version 0 is public and unencrypted
+                                            CLinkAccept link(MakeTransactionRef(tx));
+                                            CDomainEntry entry;
+                                            if (GetDomainEntry(link.RecipientFullObjectPath, entry)) {
+                                                if (SignatureProofIsValid(entry.GetWalletAddress(), link.RequestorFQDN(), link.SignatureProof)) {
+                                                    LogPrint("bdap", "%s -- Link accept from me found with a valid signature proof. Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                                    pLinkAcceptDB->AddMyLinkAccept(link);
+                                                }
+                                                else
+                                                    LogPrintf("%s -- Warning! Link accept from me found with an invalid signature proof! Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                            }
+                                        }
+                                    }
+                                    else if (nVersion == 1) {
+                                        //TODO (bdap): If version 1 or above, decrypt vchData before serialized to a class object
+                                        bool fDecrypted = false;
+                                        LogPrint("bdap", "%s -- Version 1 encrypted link accept for me found! vchLinkPubKey = %s\n", __func__, stringFromVch(vchLinkPubKey));
+                                        CKeyEd25519 privDHTKey;
+                                        CKeyID keyID(Hash160(vchLinkPubKey.begin(), vchLinkPubKey.end()));
+                                        if (GetDHTKey(keyID, privDHTKey)) {
+                                            int nDataVersion;
+                                            LogPrint("bdap", "%s --  Encrypted data size = %i\n", __func__, vchData.size());
+                                            vchData = RemoveVersionFromLinkData(vchData, nDataVersion);
+                                            if (nDataVersion == nVersion) {
+                                                std::string strMessage = "";
+                                                std::vector<unsigned char> dataDecrypted;
+                                                if (DecryptBDAPData(privDHTKey.GetPrivSeedBytes(), vchData, dataDecrypted, strMessage)) {
+                                                    std::vector<unsigned char> vchData, vchHash;
+                                                    CScript scriptData;
+                                                    scriptData << OP_RETURN << dataDecrypted;
+                                                    if (GetBDAPData(scriptData, vchData, vchHash)) {
+                                                        CLinkAccept link;
+                                                        link.UnserializeFromData(dataDecrypted, vchHash);
+                                                        pLinkAcceptDB->AddMyLinkAccept(link);
+                                                        LogPrint("bdap", "%s -- DecryptBDAPData RequestorFQDN = %s, RecipientFQDN = %s, dataDecrypted size = %i\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), dataDecrypted.size());
+                                                        fDecrypted = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (!fDecrypted)
+                                            LogPrint("bdap", "%s -- DecryptBDAPData failed.\n", __func__);
+                                    }
+                                }
+                            }
+                        }
+                        // Check to see if this link accept is for one of my BDAP accounts.
+                        {
+                            std::vector<unsigned char> vchSharedPubKey = vvchOpParameters[1];
+                            bool fIsLinkAcceptForMe = IsLinkForMe(vchLinkPubKey, vchSharedPubKey);
+                            if (fIsLinkAcceptForMe) {
+                                int nOut;
+                                std::vector<unsigned char> vchData, vchHash;
+                                if (GetBDAPData(ptx, vchData, vchHash, nOut)) {
+                                    int nVersion = GetLinkVersionFromData(vchData);
+                                    if (nVersion == 0) {
+                                        if (nVersion == 0) { // version 0 is public and unencrypted
+                                            CLinkAccept link(MakeTransactionRef(tx));
+                                            CDomainEntry entry;
+                                            if (GetDomainEntry(link.RecipientFullObjectPath, entry)) {
+                                                if (SignatureProofIsValid(entry.GetWalletAddress(), link.RequestorFQDN(), link.SignatureProof)) {
+                                                    LogPrint("bdap", "%s -- Link accept for me found with a valid signature proof. Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                                    pLinkAcceptDB->AddMyLinkAccept(link);
+                                                }
+                                                else
+                                                    LogPrintf("%s -- ***** Alert. Link accept for me found with an invalid signature proof! Link requestor = %s, recipient = %s, pubkey = %s\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), stringFromVch(vchLinkPubKey));
+                                            }
+                                        }
+                                    }
+                                    else if (nVersion == 1) {
+                                        //TODO (bdap): If version 1 or above, decrypt vchData before serialized to a class object
+                                        bool fDecrypted = false;
+                                        LogPrint("bdap", "%s -- Version 1 encrypted link accept for me found! vchLinkPubKey = %s\n", __func__, stringFromVch(vchLinkPubKey));
+                                        CKeyEd25519 privDHTKey;
+                                        CKeyID keyID(Hash160(vchLinkPubKey.begin(), vchLinkPubKey.end()));
+                                        if (GetDHTKey(keyID, privDHTKey)) {
+                                            int nDataVersion;
+                                            LogPrint("bdap", "%s --  Encrypted data size = %i\n", __func__, vchData.size());
+                                            vchData = RemoveVersionFromLinkData(vchData, nDataVersion);
+                                            if (nDataVersion == nVersion) {
+                                                std::string strMessage = "";
+                                                std::vector<unsigned char> dataDecrypted;
+                                                if (DecryptBDAPData(privDHTKey.GetPrivSeedBytes(), vchData, dataDecrypted, strMessage)) {
+                                                    std::vector<unsigned char> vchData, vchHash;
+                                                    CScript scriptData;
+                                                    scriptData << OP_RETURN << dataDecrypted;
+                                                    if (GetBDAPData(scriptData, vchData, vchHash)) {
+                                                        CLinkAccept link;
+                                                        link.UnserializeFromData(dataDecrypted, vchHash);
+                                                        pLinkAcceptDB->AddMyLinkAccept(link);
+                                                        LogPrint("bdap", "%s -- DecryptBDAPData RequestorFQDN = %s, RecipientFQDN = %s, dataDecrypted size = %i\n", __func__, link.RequestorFQDN(), link.RecipientFQDN(), dataDecrypted.size());
+                                                        fDecrypted = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (!fDecrypted)
+                                            LogPrint("bdap", "%s -- DecryptBDAPData failed.\n", __func__);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CWalletTx wtx(this, ptx);
 
             // Get merkle branch if transaction was found in a block
             if (posInBlock != -1)
@@ -1278,7 +1574,7 @@ bool CWallet::AbandonTransaction(const uint256& hashTx)
     // Can't mark abandoned if confirmed or in mempool
     assert(mapWallet.count(hashTx));
     CWalletTx& origtx = mapWallet[hashTx];
-    if (origtx.GetDepthInMainChain() > 0 || origtx.InMempool()) {
+    if (origtx.GetDepthInMainChain() > 0 || origtx.InMempool() || origtx.IsLockedByInstantSend()) {
         return false;
     }
 
@@ -1938,7 +2234,7 @@ void CWallet::ReacceptWalletTransactions()
 
         int nDepth = wtx.GetDepthInMainChain();
 
-        if (!wtx.IsCoinBase() && (nDepth == 0 && !wtx.isAbandoned())) {
+        if (!wtx.IsCoinBase() && (nDepth == 0 && !wtx.IsLockedByInstantSend() && !wtx.isAbandoned())) {
             mapSorted.insert(std::make_pair(wtx.nOrderPos, &wtx));
         }
     }
@@ -1963,7 +2259,8 @@ bool CWalletTx::RelayWalletTransaction(CConnman* connman, const std::string& str
             uint256 hash = GetHash();
             LogPrintf("Relaying wtx %s\n", hash.ToString());
 
-            if (strCommand == NetMsgType::TXLOCKREQUEST) {
+            if ((strCommand == NetMsgType::TXLOCKREQUEST) ||
+                ((CTxLockRequest(*this).IsSimple()) && CInstantSend::CanAutoLock())) {
                 if (instantsend.ProcessTxLockRequest((CTxLockRequest) * this, *connman)) {
                     instantsend.AcceptLockRequest((CTxLockRequest) * this);
                 } else {
@@ -2170,7 +2467,7 @@ CAmount CWalletTx::GetDenominatedCredit(bool unconfirmed, bool fUseCache) const
     if (IsCoinBase() && GetBlocksToMaturity() > 0)
         return 0;
 
-    int nDepth = GetDepthInMainChain(false);
+    int nDepth = GetDepthInMainChain();
     if (nDepth < 0)
         return 0;
 
@@ -2236,6 +2533,8 @@ bool CWalletTx::IsTrusted() const
         return true;
     if (nDepth < 0)
         return false;
+    if (IsLockedByInstantSend())
+        return true;
     if (!bSpendZeroConfChange || !IsFromMe(ISMINE_ALL)) // using wtx's cached debit
         return false;
 
@@ -2490,7 +2789,7 @@ CAmount CWallet::GetUnconfirmedBalance() const
         LOCK2(cs_main, cs_wallet);
         for (std::map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
             const CWalletTx* pcoin = &(*it).second;
-            if (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0 && pcoin->InMempool())
+            if (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0 && !pcoin->IsLockedByInstantSend() && pcoin->InMempool())
                 nTotal += pcoin->GetAvailableCredit();
         }
     }
@@ -2532,7 +2831,7 @@ CAmount CWallet::GetUnconfirmedWatchOnlyBalance() const
         LOCK2(cs_main, cs_wallet);
         for (std::map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
             const CWalletTx* pcoin = &(*it).second;
-            if (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0 && pcoin->InMempool())
+            if (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0 && !pcoin->IsLockedByInstantSend() && pcoin->InMempool())
                 nTotal += pcoin->GetAvailableWatchOnlyCredit();
         }
     }
@@ -2572,7 +2871,7 @@ void CWallet::GetBDAPCoins(std::vector<COutput>& vCoins, const CScript& prevScri
             if (pcoin->IsCoinBase() && pcoin->GetBlocksToMaturity() > 0)
                 continue;
 
-            int nDepth = pcoin->GetDepthInMainChain(false);
+            int nDepth = pcoin->GetDepthInMainChain();
 
             // We should not consider coins which aren't at least in our mempool
             // It's possible for these to be conflicted via ancestors which we may never be able to detect
@@ -2614,7 +2913,7 @@ void CWallet::AvailableCoins(std::vector<COutput>& vCoins, bool fOnlyConfirmed, 
             if (pcoin->IsCoinBase() && pcoin->GetBlocksToMaturity() > 0)
                 continue;
 
-            int nDepth = pcoin->GetDepthInMainChain(false);
+            int nDepth = pcoin->GetDepthInMainChain();
             // do not use IX for inputs that have less then nInstantSendConfirmationsRequired blockchain confirmations
             if (fUseInstantSend && nDepth < nInstantSendConfirmationsRequired)
                 continue;
@@ -2698,6 +2997,14 @@ static void ApproximateBestSubset(std::vector<std::pair<CAmount, std::pair<const
     }
 }
 
+struct CompareByPriority {
+    bool operator()(const COutput& t1,
+        const COutput& t2) const
+    {
+        return t1.Priority() > t2.Priority();
+    }
+};
+
 // move denoms down
 bool less_then_denom(const COutput& out1, const COutput& out2)
 {
@@ -2716,66 +3023,101 @@ bool less_then_denom(const COutput& out1, const COutput& out2)
     return (!found1 && found2);
 }
 
-bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, const int nConfMine, const int nConfTheirs, const uint64_t nMaxAncestors, std::vector<COutput> vCoins, std::set<std::pair<const CWalletTx*, unsigned int> >& setCoinsRet, CAmount& nValueRet, bool fUseInstantSend) const
+bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, const int nConfMine, const int nConfTheirs, const uint64_t nMaxAncestors, std::vector<COutput> vCoins,
+                                 std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, CAmount& nValueRet, AvailableCoinsType nCoinType, bool fUseInstantSend) const
 {
     setCoinsRet.clear();
     nValueRet = 0;
 
     // List of values less than target
-    std::pair<CAmount, std::pair<const CWalletTx*, unsigned int> > coinLowestLarger;
-    coinLowestLarger.first = fUseInstantSend ? sporkManager.GetSporkValue(SPORK_5_INSTANTSEND_MAX_VALUE) * COIN : std::numeric_limits<CAmount>::max();
+    std::pair<CAmount, std::pair<const CWalletTx*,unsigned int> > coinLowestLarger;
+    coinLowestLarger.first = fUseInstantSend
+                                        ? sporkManager.GetSporkValue(SPORK_5_INSTANTSEND_MAX_VALUE)*COIN
+                                        : std::numeric_limits<CAmount>::max();
     coinLowestLarger.second.first = NULL;
-    std::vector<std::pair<CAmount, std::pair<const CWalletTx*, unsigned int> > > vValue;
+    std::vector<std::pair<CAmount, std::pair<const CWalletTx*,unsigned int> > > vValue;
     CAmount nTotalLower = 0;
 
     random_shuffle(vCoins.begin(), vCoins.end(), GetRandInt);
 
-    // move denoms down on the list
-    sort(vCoins.begin(), vCoins.end(), less_then_denom);
+    int tryDenomStart = 0;
+    CAmount nMinChange = MIN_CHANGE;
+
+    if (nCoinType == ONLY_DENOMINATED) {
+        // larger denoms first
+        std::sort(vCoins.rbegin(), vCoins.rend(), CompareByPriority());
+        // we actually want denoms only, so let's skip "non-denom only" step
+        tryDenomStart = 1;
+        // no change is allowed
+        nMinChange = 0;
+    } else {
+        // move denoms down on the list
+        // try not to use denominated coins when not needed, save denoms for privatesend
+        std::sort(vCoins.begin(), vCoins.end(), less_then_denom);
+    }
 
     // try to find nondenom first to prevent unneeded spending of mixed coins
-    for (unsigned int tryDenom = 0; tryDenom < 2; tryDenom++) {
+    for (unsigned int tryDenom = tryDenomStart; tryDenom < 2; tryDenom++)
+    {
         LogPrint("selectcoins", "tryDenom: %d\n", tryDenom);
         vValue.clear();
         nTotalLower = 0;
-        BOOST_FOREACH (const COutput& output, vCoins) {
+        BOOST_FOREACH(const COutput &output, vCoins)
+        {
             if (!output.fSpendable)
                 continue;
 
-            const CWalletTx* pcoin = output.tx;
+            const CWalletTx *pcoin = output.tx;
 
-            //            if (fDebug) LogPrint("selectcoins", "value %s confirms %d\n", FormatMoney(pcoin->vout[output.i].nValue), output.nDepth);
+//            if (fDebug) LogPrint("selectcoins", "value %s confirms %d\n", FormatMoney(pcoin->vout[output.i].nValue), output.nDepth);
             if (output.nDepth < (pcoin->IsFromMe(ISMINE_ALL) ? nConfMine : nConfTheirs))
+                continue;
+
+            if (!mempool.TransactionWithinChainLimit(pcoin->GetHash(), nMaxAncestors))
                 continue;
 
             int i = output.i;
             CAmount n = pcoin->tx->vout[i].nValue;
-            if (tryDenom == 0 && CPrivateSend::IsDenominatedAmount(n))
-                continue; // we don't want denom values on first run
+            if (tryDenom == 0 && CPrivateSend::IsDenominatedAmount(n)) continue; // we don't want denom values on first run
 
-            std::pair<CAmount, std::pair<const CWalletTx*, unsigned int> > coin = std::make_pair(n, std::make_pair(pcoin, i));
+            if (nCoinType == ONLY_DENOMINATED) {
+                // Make sure it's actually anonymized
+                COutPoint outpoint = COutPoint(pcoin->GetHash(), i);
+                int nRounds = GetRealOutpointPrivateSendRounds(outpoint);
+                if (nRounds < privateSendClient.nPrivateSendRounds) continue;
+            }
 
-            if (n == nTargetValue) {
+            std::pair<CAmount, std::pair<const CWalletTx*,unsigned int> > coin = std::make_pair(n, std::make_pair(pcoin, i));
+
+            if (n == nTargetValue)
+            {
                 setCoinsRet.insert(coin.second);
                 nValueRet += coin.first;
                 return true;
-            } else if (n < nTargetValue + MIN_CHANGE) {
+            }
+            else if (n < nTargetValue + nMinChange)
+            {
                 vValue.push_back(coin);
                 nTotalLower += n;
-            } else if (n < coinLowestLarger.first) {
+            }
+            else if (n < coinLowestLarger.first)
+            {
                 coinLowestLarger = coin;
             }
         }
 
-        if (nTotalLower == nTargetValue) {
-            for (unsigned int i = 0; i < vValue.size(); ++i) {
+        if (nTotalLower == nTargetValue)
+        {
+            for (unsigned int i = 0; i < vValue.size(); ++i)
+            {
                 setCoinsRet.insert(vValue[i].second);
                 nValueRet += vValue[i].first;
             }
             return true;
         }
 
-        if (nTotalLower < nTargetValue) {
+        if (nTotalLower < nTargetValue)
+        {
             if (coinLowestLarger.second.first == NULL) // there is no input larger than nTargetValue
             {
                 if (tryDenom == 0)
@@ -2787,11 +3129,14 @@ bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, const int nConfMin
             }
             setCoinsRet.insert(coinLowestLarger.second);
             nValueRet += coinLowestLarger.first;
-            return true;
+            // There is no change in PS, so we know the fee beforehand,
+            // can see if we exceeded the max fee and thus fail quickly.
+            return nCoinType == ONLY_DENOMINATED ? (nValueRet - nTargetValue <= maxTxFee) : true;
         }
 
         // nTotalLower > nTargetValue
         break;
+
     }
 
     // Solve subset sum by stochastic approximation
@@ -2801,19 +3146,23 @@ bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, const int nConfMin
     CAmount nBest;
 
     ApproximateBestSubset(vValue, nTotalLower, nTargetValue, vfBest, nBest, fUseInstantSend);
-    if (nBest != nTargetValue && nTotalLower >= nTargetValue + MIN_CHANGE)
-        ApproximateBestSubset(vValue, nTotalLower, nTargetValue + MIN_CHANGE, vfBest, nBest, fUseInstantSend);
+    if (nBest != nTargetValue && nTotalLower >= nTargetValue + nMinChange)
+        ApproximateBestSubset(vValue, nTotalLower, nTargetValue + nMinChange, vfBest, nBest, fUseInstantSend);
 
     // If we have a bigger coin and (either the stochastic approximation didn't find a good solution,
     //                                   or the next bigger coin is closer), return the bigger coin
     if (coinLowestLarger.second.first &&
-        ((nBest != nTargetValue && nBest < nTargetValue + MIN_CHANGE) || coinLowestLarger.first <= nBest)) {
+        ((nBest != nTargetValue && nBest < nTargetValue + nMinChange) || coinLowestLarger.first <= nBest))
+    {
         setCoinsRet.insert(coinLowestLarger.second);
         nValueRet += coinLowestLarger.first;
-    } else {
+    }
+    else {
         std::string s = "CWallet::SelectCoinsMinConf best subset: ";
-        for (unsigned int i = 0; i < vValue.size(); i++) {
-            if (vfBest[i]) {
+        for (unsigned int i = 0; i < vValue.size(); i++)
+        {
+            if (vfBest[i])
+            {
                 setCoinsRet.insert(vValue[i].second);
                 nValueRet += vValue[i].first;
                 s += FormatMoney(vValue[i].first) + " ";
@@ -2822,27 +3171,30 @@ bool CWallet::SelectCoinsMinConf(const CAmount& nTargetValue, const int nConfMin
         LogPrint("selectcoins", "%s - total %s\n", s, FormatMoney(nBest));
     }
 
-    return true;
+    // There is no change in PS, so we know the fee beforehand,
+    // can see if we exceeded the max fee and thus fail quickly.
+    return nCoinType == ONLY_DENOMINATED ? (nValueRet - nTargetValue <= maxTxFee) : true;
 }
 
-bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAmount& nTargetValue, std::set<std::pair<const CWalletTx*, unsigned int> >& setCoinsRet, CAmount& nValueRet, const CCoinControl* coinControl, AvailableCoinsType nCoinType, bool fUseInstantSend) const
+bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAmount& nTargetValue, std::set<std::pair<const CWalletTx*,unsigned int> >& setCoinsRet, CAmount& nValueRet, const CCoinControl* coinControl, AvailableCoinsType nCoinType, bool fUseInstantSend) const
 {
     // Note: this function should never be used for "always free" tx types like pstx
 
     std::vector<COutput> vCoins(vAvailableCoins);
 
     // coin control -> return all selected outputs (we want all selected to go into the transaction for sure)
-    if (coinControl && coinControl->HasSelected() && !coinControl->fAllowOtherInputs) {
-        BOOST_FOREACH (const COutput& out, vCoins) {
-            if (!out.fSpendable)
+    if (coinControl && coinControl->HasSelected() && !coinControl->fAllowOtherInputs)
+    {
+        BOOST_FOREACH(const COutput& out, vCoins)
+        {
+            if(!out.fSpendable)
                 continue;
 
-            if (nCoinType == ONLY_DENOMINATED) {
-                COutPoint outpoint = COutPoint(out.tx->GetHash(), out.i);
+            if(nCoinType == ONLY_DENOMINATED) {
+                COutPoint outpoint = COutPoint(out.tx->GetHash(),out.i);
                 int nRounds = GetOutpointPrivateSendRounds(outpoint);
                 // make sure it's actually anonymized
-                if (nRounds < privateSendClient.nPrivateSendRounds)
-                    continue;
+                if(nRounds < privateSendClient.nPrivateSendRounds) continue;
             }
             nValueRet += out.tx->tx->vout[out.i].nValue;
             setCoinsRet.insert(std::make_pair(out.tx, out.i));
@@ -2851,39 +3203,6 @@ bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAm
         return (nValueRet >= nTargetValue);
     }
 
-
-    //if we're doing only denominated, we need to round up to the nearest smallest denomination
-    if (nCoinType == ONLY_DENOMINATED) {
-        std::vector<CAmount> vecPrivateSendDenominations = CPrivateSend::GetStandardDenominations();
-        std::vector<CAmount> vecDenominationsAsAFee = vecPrivateSendDenominations;
-        std::reverse(vecDenominationsAsAFee.begin(), vecDenominationsAsAFee.end());
-
-        // Try to fit into fee that matches one of denominations, from small to large
-        for (const auto& nDenomAsAFee : vecDenominationsAsAFee) {
-            CAmount nMaxPSFee = std::min(nDenomAsAFee, maxTxFee);
-            // Make outputs by looping through denominations, from large to small
-            for (const auto& nDenom : vecPrivateSendDenominations) {
-                for (const auto& out : vCoins) {
-                    // Make sure it's the denom we're looking for, round the amount up to current max fee
-                    if (out.tx->tx->vout[out.i].nValue == nDenom && nValueRet + nDenom < nTargetValue + nMaxPSFee) {
-                        COutPoint outpoint = COutPoint(out.tx->GetHash(),out.i);
-                        int nRounds = GetRealOutpointPrivateSendRounds(outpoint);
-                        // Make sure it's actually anonymized
-                        if (nRounds < privateSendClient.nPrivateSendRounds) continue;
-                        nValueRet += nDenom;
-                        setCoinsRet.insert(std::make_pair(out.tx, out.i));
-                        if (nValueRet >= nTargetValue) return true; // Done, no need to look any further
-                    }
-                }
-            }
-            // No luck, try next denom as current max fee
-            setCoinsRet.clear();
-            // but only if current denom doesn't exceed the global max fee already
-            if (nDenomAsAFee >= maxTxFee) return false;
-        }
-        // should never get here, just in case denom vector is empty for some reason
-        return false;
-    }
     // calculate value from preset inputs and store them
     std::set<std::pair<const CWalletTx*, uint32_t> > setPresetCoins;
     CAmount nValueFromPresetInputs = 0;
@@ -2891,13 +3210,21 @@ bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAm
     std::vector<COutPoint> vPresetInputs;
     if (coinControl)
         coinControl->ListSelected(vPresetInputs);
-    BOOST_FOREACH (const COutPoint& outpoint, vPresetInputs) {
+    BOOST_FOREACH(const COutPoint& outpoint, vPresetInputs)
+    {
         std::map<uint256, CWalletTx>::const_iterator it = mapWallet.find(outpoint.hash);
-        if (it != mapWallet.end()) {
+        if (it != mapWallet.end())
+        {
             const CWalletTx* pcoin = &it->second;
             // Clearly invalid input, fail
             if (pcoin->tx->vout.size() <= outpoint.n)
                 return false;
+            if (nCoinType == ONLY_DENOMINATED) {
+                // Make sure to include anonymized preset inputs only,
+                // even if some non-anonymized inputs were manually selected via CoinControl
+                int nRounds = GetRealOutpointPrivateSendRounds(outpoint);
+                if (nRounds < privateSendClient.nPrivateSendRounds) continue;
+            }
             nValueFromPresetInputs += pcoin->tx->vout[outpoint.n].nValue;
             setPresetCoins.insert(std::make_pair(pcoin, outpoint.n));
         } else
@@ -2905,7 +3232,8 @@ bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAm
     }
 
     // remove preset inputs from vCoins
-    for (std::vector<COutput>::iterator it = vCoins.begin(); it != vCoins.end() && coinControl && coinControl->HasSelected();) {
+    for (std::vector<COutput>::iterator it = vCoins.begin(); it != vCoins.end() && coinControl && coinControl->HasSelected();)
+    {
         if (setPresetCoins.count(std::make_pair(it->tx, it->i)))
             it = vCoins.erase(it);
         else
@@ -2916,13 +3244,13 @@ bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAm
     bool fRejectLongChains = GetBoolArg("-walletrejectlongchains", DEFAULT_WALLET_REJECT_LONG_CHAINS);
 
     bool res = nTargetValue <= nValueFromPresetInputs ||
-               SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 1, 6, 0, vCoins, setCoinsRet, nValueRet, fUseInstantSend) ||
-               SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 1, 1, 0, vCoins, setCoinsRet, nValueRet, fUseInstantSend) ||
-               (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, 2, vCoins, setCoinsRet, nValueRet, fUseInstantSend)) ||
-               (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, std::min((size_t)4, nMaxChainLength / 3), vCoins, setCoinsRet, nValueRet, fUseInstantSend)) ||
-               (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, nMaxChainLength / 2, vCoins, setCoinsRet, nValueRet, fUseInstantSend)) ||
-               (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, nMaxChainLength, vCoins, setCoinsRet, nValueRet, fUseInstantSend)) ||
-               (bSpendZeroConfChange && !fRejectLongChains && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, std::numeric_limits<uint64_t>::max(), vCoins, setCoinsRet, nValueRet, fUseInstantSend));
+        SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 1, 6, 0, vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend) ||
+        SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 1, 1, 0, vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend) ||
+        (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, 2, vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend)) ||
+        (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, std::min((size_t)4, nMaxChainLength/3), vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend)) ||
+        (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, nMaxChainLength/2, vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend)) ||
+        (bSpendZeroConfChange && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, nMaxChainLength, vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend)) ||
+        (bSpendZeroConfChange && !fRejectLongChains && SelectCoinsMinConf(nTargetValue - nValueFromPresetInputs, 0, 1, std::numeric_limits<uint64_t>::max(), vCoins, setCoinsRet, nValueRet, nCoinType, fUseInstantSend));
 
     // because SelectCoinsMinConf clears the setCoinsRet, we now add the possible inputs to the coinset
     setCoinsRet.insert(setPresetCoins.begin(), setPresetCoins.end());
@@ -2932,14 +3260,6 @@ bool CWallet::SelectCoins(const std::vector<COutput>& vAvailableCoins, const CAm
 
     return res;
 }
-
-struct CompareByPriority {
-    bool operator()(const COutput& t1,
-        const COutput& t2) const
-    {
-        return t1.Priority() > t2.Priority();
-    }
-};
 
 bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool overrideEstimatedFeeRate, const CFeeRate& specificFeeRate, int& nChangePosInOut, std::string& strFailReason, bool includeWatching, bool lockUnspents, const std::set<int>& setSubtractFeeFromOutputs, bool keepReserveKey, const CTxDestination& destChange)
 {
@@ -3016,82 +3336,62 @@ bool CWallet::FundTransaction(CMutableTransaction& tx, CAmount& nFeeRet, bool ov
     return true;
 }
 
-bool CWallet::SelectCoinsByDenominations(int nDenom, CAmount nValueMin, CAmount nValueMax, std::vector<CTxPSIn>& vecTxPSInRet, std::vector<COutput>& vCoinsRet, CAmount& nValueRet, int nPrivateSendRoundsMin, int nPrivateSendRoundsMax, bool fNoDuplicateTxIds)
+bool CWallet::SelectPSInOutPairsByDenominations(int nDenom, CAmount nValueMin, CAmount nValueMax, std::vector< std::pair<CTxPSIn, CTxOut> >& vecPSInOutPairsRet)
 {
+    CAmount nValueTotal{0};
+    int nDenomResult{0};
+
     std::set<uint256> setRecentTxIds;
-
-    vecTxPSInRet.clear();
-    vCoinsRet.clear();
-    nValueRet = 0;
-
     std::vector<COutput> vCoins;
-    AvailableCoins(vCoins, true, NULL, false, ONLY_DENOMINATED);
 
-    std::random_shuffle(vCoins.rbegin(), vCoins.rend(), GetRandInt);
-
-    // ( bit on if present )
-    // bit 0 - 100DYN+1
-    // bit 1 - 10DYN+1
-    // bit 2 - 1DYN+1
-    // bit 3 - .1DYN+1
+    vecPSInOutPairsRet.clear();
 
     std::vector<int> vecBits;
     if (!CPrivateSend::GetDenominationsBits(nDenom, vecBits)) {
         return false;
     }
 
-    int nDenomResult = 0;
+    AvailableCoins(vCoins, true, NULL, false, ONLY_DENOMINATED);
+    LogPrintf("CWallet::%s -- vCoins.size(): %d\n", __func__, vCoins.size());
+
+    std::random_shuffle(vCoins.rbegin(), vCoins.rend(), GetRandInt);
 
     std::vector<CAmount> vecPrivateSendDenominations = CPrivateSend::GetStandardDenominations();
-    FastRandomContext insecure_rand;
-    BOOST_FOREACH (const COutput& out, vCoins) {
-        // dynode-like input should not be selected by AvailableCoins now anyway
-        //if(out.tx->vout[out.i].nValue == 1000*COIN) continue;
-        if (fNoDuplicateTxIds && setRecentTxIds.find(out.tx->GetHash()) != setRecentTxIds.end())
-            continue;
-        if (nValueRet + out.tx->tx->vout[out.i].nValue <= nValueMax) {
-            CTxIn txin = CTxIn(out.tx->GetHash(), out.i);
+    for (const auto& out : vCoins) {
+        uint256 txHash = out.tx->GetHash();
+        int nValue = out.tx->tx->vout[out.i].nValue;
+        if (setRecentTxIds.find(txHash) != setRecentTxIds.end()) continue; // no duplicate txids
+        if (nValueTotal + nValue > nValueMax) continue;
 
-            int nRounds = GetOutpointPrivateSendRounds(txin.prevout);
-            if (nRounds >= nPrivateSendRoundsMax)
-                continue;
-            if (nRounds < nPrivateSendRoundsMin)
-                continue;
+        CTxIn txin = CTxIn(txHash, out.i);
+        CScript scriptPubKey = out.tx->tx->vout[out.i].scriptPubKey;
+        int nRounds = GetRealOutpointPrivateSendRounds(txin.prevout);
+        if (nRounds >= privateSendClient.nPrivateSendRounds) continue;
 
-            for (const auto& nBit : vecBits) {
-                if (out.tx->tx->vout[out.i].nValue == vecPrivateSendDenominations[nBit]) {
-                    nValueRet += out.tx->tx->vout[out.i].nValue;
-                    vecTxPSInRet.push_back(CTxPSIn(txin, out.tx->tx->vout[out.i].scriptPubKey));
-                    vCoinsRet.push_back(out);
-                    nDenomResult |= 1 << nBit;
-                    setRecentTxIds.emplace(out.tx->GetHash());
-                    LogPrint("privatesend", "CWallet::SelectCoinsByDenominations -- hash %s nValue %d\n", out.tx->GetHash().ToString(), out.tx->tx->vout[out.i].nValue);
-                }
-            }
+        for (const auto& nBit : vecBits) {
+            if (nValue != vecPrivateSendDenominations[nBit]) continue;
+            nValueTotal += nValue;
+            vecPSInOutPairsRet.emplace_back(CTxPSIn(txin, scriptPubKey), CTxOut(nValue, scriptPubKey, nRounds));
+            setRecentTxIds.emplace(txHash);
+            nDenomResult |= 1 << nBit;
+            LogPrint("privatesend", "CWallet::%s -- hash: %s, nValue: %d.%08d, nRounds: %d\n",
+                            __func__, txHash.ToString(), nValue / COIN, nValue % COIN, nRounds);
         }
     }
 
-    LogPrintf("CWallet::SelectCoinsByDenominations -- setRecentTxIds.size() %d\n", setRecentTxIds.size());
+    LogPrintf("CWallet::%s -- setRecentTxIds.size(): %d\n", __func__, setRecentTxIds.size());
 
-    return nValueRet >= nValueMin && nDenom == nDenomResult;
+    return nValueTotal >= nValueMin && nDenom == nDenomResult;
 }
 
-struct CompareByAmount {
-    bool operator()(const CompactTallyItem& t1,
-        const CompactTallyItem& t2) const
-    {
-        return t1.nAmount > t2.nAmount;
-    }
-};
-
-bool CWallet::SelectCoinsGroupedByAddresses(std::vector<CompactTallyItem>& vecTallyRet, bool fSkipDenominated, bool fAnonymizable, bool fSkipUnconfirmed) const
+bool CWallet::SelectCoinsGroupedByAddresses(std::vector<CompactTallyItem>& vecTallyRet, bool fSkipDenominated, bool fAnonymizable, bool fSkipUnconfirmed, int nMaxOupointsPerAddress) const
 {
     LOCK2(cs_main, cs_wallet);
 
     isminefilter filter = ISMINE_SPENDABLE;
 
-    // try to use cache
-    if (fAnonymizable && fSkipUnconfirmed) {
+    // try to use cache for already confirmed anonymizable inputs, no cache should be used when the limit is specified
+    if(nMaxOupointsPerAddress != -1 && fAnonymizable && fSkipUnconfirmed) {
         if (fSkipDenominated && fAnonymizableTallyCachedNonDenom) {
             vecTallyRet = vecAnonymizableTallyCachedNonDenom;
             LogPrint("selectcoins", "SelectCoinsGroupedByAddresses - using cache for non-denom inputs\n");
@@ -3134,6 +3434,10 @@ bool CWallet::SelectCoinsGroupedByAddresses(std::vector<CompactTallyItem>& vecTa
             if (!(mine & filter))
                 continue;
 
+            auto itTallyItem = mapTally.find(txdest);
+            if (nMaxOupointsPerAddress != -1 && itTallyItem != mapTally.end() && (int) itTallyItem->second.vecOutPoints.size() >= nMaxOupointsPerAddress)
+                continue;
+
             if (IsSpent(outpoint.hash, i) || IsLockedCoin(outpoint.hash, i))
                 continue;
 
@@ -3155,14 +3459,17 @@ bool CWallet::SelectCoinsGroupedByAddresses(std::vector<CompactTallyItem>& vecTa
                     continue;
             }
 
-            CompactTallyItem& item = mapTally[txdest];
-            item.txdest = txdest;
-            item.nAmount += wtx.tx->vout[i].nValue;
-            item.vecOutPoints.emplace_back(outpoint.hash, i);
+            if (itTallyItem == mapTally.end()) {
+                itTallyItem = mapTally.emplace(txdest, CompactTallyItem()).first;
+                itTallyItem->second.txdest = txdest;
+            }
+            itTallyItem->second.nAmount += wtx.tx->vout[i].nValue;
+            itTallyItem->second.vecOutPoints.emplace_back(outpoint.hash, i);
         }
     }
 
     // construct resulting vector
+    // NOTE: vecTallyRet is "sorted" by txdest (i.e. address), just like mapTally
     vecTallyRet.clear();
     for (const auto& item : mapTally) {
         if (fAnonymizable && item.second.nAmount < nSmallestDenom)
@@ -3170,11 +3477,8 @@ bool CWallet::SelectCoinsGroupedByAddresses(std::vector<CompactTallyItem>& vecTa
         vecTallyRet.push_back(item.second);
     }
 
-    // order by amounts per address, from smallest to largest
-    sort(vecTallyRet.rbegin(), vecTallyRet.rend(), CompareByAmount());
-
-    // cache anonymizable for later use
-    if (fAnonymizable && fSkipUnconfirmed) {
+    // cache already confirmed anonymizable entries for later use, no cache should be saved when the limit is specified
+    if(nMaxOupointsPerAddress != -1 && fAnonymizable && fSkipUnconfirmed) {
         if (fSkipDenominated) {
             vecAnonymizableTallyCachedNonDenom = vecTallyRet;
             fAnonymizableTallyCachedNonDenom = true;
@@ -3194,7 +3498,7 @@ bool CWallet::SelectCoinsGroupedByAddresses(std::vector<CompactTallyItem>& vecTa
     return vecTallyRet.size() > 0;
 }
 
-bool CWallet::SelectCoinsMix(CAmount nValueMin, CAmount nValueMax, std::vector<CTxIn>& vecTxInRet, CAmount& nValueRet, int nPrivateSendRoundsMin, int nPrivateSendRoundsMax) const
+bool CWallet::SelectPrivateCoins(CAmount nValueMin, CAmount nValueMax, std::vector<CTxIn>& vecTxInRet, CAmount& nValueRet, int nPrivateSendRoundsMin, int nPrivateSendRoundsMax) const
 {
     CCoinControl* coinControl = NULL;
 
@@ -3207,7 +3511,8 @@ bool CWallet::SelectCoinsMix(CAmount nValueMin, CAmount nValueMax, std::vector<C
     //order the array so largest nondenom are first, then denominations, then very small inputs.
     sort(vCoins.rbegin(), vCoins.rend(), CompareByPriority());
 
-    BOOST_FOREACH (const COutput& out, vCoins) {
+    for (const auto& out : vCoins)
+    {
         //do not allow inputs less than 1/10th of minimum value
         if (out.tx->tx->vout[out.i].nValue < nValueMin / 10)
             continue;
@@ -3236,6 +3541,8 @@ bool CWallet::SelectCoinsMix(CAmount nValueMin, CAmount nValueMax, std::vector<C
 
 bool CWallet::GetCollateralTxPSIn(CTxPSIn& txpsinRet, CAmount& nValueRet) const
 {
+    LOCK2(cs_main, cs_wallet);
+
     std::vector<COutput> vCoins;
 
     AvailableCoins(vCoins);
@@ -3318,7 +3625,7 @@ int CWallet::CountInputsWithAmount(CAmount nInputAmount)
         for (std::map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
             const CWalletTx* pcoin = &(*it).second;
             if (pcoin->IsTrusted()) {
-                int nDepth = pcoin->GetDepthInMainChain(false);
+                int nDepth = pcoin->GetDepthInMainChain();
 
                 for (unsigned int i = 0; i < pcoin->tx->vout.size(); i++) {
                     COutput out = COutput(pcoin, i, nDepth, true, true);
@@ -3368,7 +3675,7 @@ bool CWallet::CreateCollateralTransaction(CMutableTransaction& txCollateral, std
 
     // pay collateral charge in fees
     // NOTE: no need for protobump patch here,
-    // CPrivateSend::IsCollateralAmount in GetCollateralTxDSIn should already take care of this
+    // CPrivateSend::IsCollateralAmount in GetCollateralTxPSIn should already take care of this
     if (nValue >= CPrivateSend::GetCollateralAmount() * 2) {
         // make our change address
         CScript scriptChange;
@@ -3444,7 +3751,9 @@ bool CWallet::ConvertList(std::vector<CTxIn> vecTxIn, std::vector<CAmount>& vecA
 
 bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletTx& wtxNew, CReserveKey& reservekey, CAmount& nFeeRet, int& nChangePosInOut, std::string& strFailReason, const CCoinControl* coinControl, bool sign, AvailableCoinsType nCoinType, bool fUseInstantSend, bool fIsBDAP)
 {
-    CAmount nFeePay = fUseInstantSend ? CTxLockRequest().GetMinFee() : 0;
+
+    CAmount nFeePay = fUseInstantSend ? CTxLockRequest().GetMinFee(true) : 0;
+    std::string strOpType;
 
     CAmount nValue = 0;
     int nChangePosRequest = nChangePosInOut;
@@ -3504,7 +3813,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
 
     assert(txNew.nLockTime <= (unsigned int)chainActive.Height());
     assert(txNew.nLockTime < LOCKTIME_THRESHOLD);
-
+    
     {
         std::set<std::pair<const CWalletTx*, unsigned int> > setCoins;
         std::vector<CTxPSIn> vecTxPSInTmp;
@@ -3515,22 +3824,31 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
             int nInstantSendConfirmationsRequired = Params().GetConsensus().nInstantSendConfirmationsRequired;
 
             if (fIsBDAP) {
-                CDomainEntry entry;
-                CDomainEntry prevEntry;
-                std::string strOpType;
-                if (!GetDomainEntryFromRecipient(vecSend, entry, strOpType)) {
-                    strFailReason = _("GetDomainEntryFromRecipient failed to find BDAP scripts in the recipient array.");
+                
+                std::vector<unsigned char> vchValue;
+                CScript bdapOperationScript;
+                if (!GetScriptOpTypeValue(vecSend, bdapOperationScript, strOpType, vchValue)) {
+                    strFailReason = _("Failed to find BDAP operation script in the recipient array.");
                     return false;
                 }
-                if (strOpType == "bdap_new") {
+                if (strOpType == "bdap_new_account") {
                     AvailableCoins(vAvailableCoins, true, coinControl, false, nCoinType, fUseInstantSend);
-                } else if (strOpType == "bdap_update" || strOpType == "bdap_delete") {
-                    //LogPrintf("CreateTransaction for BDAP entry %s , operation type = %s\n", entry.GetFullObjectPath(), strOpType);
+                }
+                else if (strOpType == "bdap_update_account" || strOpType == "bdap_delete_account") {
+                    CDomainEntry prevEntry;
                     if (CheckDomainEntryDB()) {
-                        if (!pDomainEntryDB->GetDomainEntryInfo(entry.vchFullObjectPath(), prevEntry)) {
+                        if (!pDomainEntryDB->GetDomainEntryInfo(vchValue, prevEntry)) {
                             strFailReason = _("GetDomainEntryInfo failed to find previous domanin entry.");
                             return false;
                         }
+                        if (prevEntry.ObjectID.size() == 0) {
+                            strFailReason = _("GetDomainEntryInfo returned a blank domanin entry.");
+                            return false;
+                        }
+                    }
+                    else {
+                        strFailReason = _("CheckDomainEntryDB failed.");
+                        return false;
                     }
                     CTransactionRef prevTx;
                     uint256 hashBlock;
@@ -3541,6 +3859,64 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
                     CScript prevScriptPubKey;
                     GetBDAPOpScript(prevTx, prevScriptPubKey);
                     GetBDAPCoins(vAvailableCoins, prevScriptPubKey);
+                }
+                else if (strOpType == "bdap_new_link_request") {
+                    uint256 txid;
+                    if (GetLinkRequestIndex(vchValue, txid)) {
+                        strFailReason = _("Public key already used for a link request.");
+                        return false;
+                    }
+                    AvailableCoins(vAvailableCoins, true, coinControl, false, nCoinType, fUseInstantSend);
+                }
+                else if (strOpType == "bdap_new_link_accept") {
+                    uint256 txid;
+                    if (GetLinkAcceptIndex(vchValue, txid)) {
+                        strFailReason = _("Public key already used for an accepted link.");
+                        return false;
+                    }
+                    AvailableCoins(vAvailableCoins, true, coinControl, false, nCoinType, fUseInstantSend);
+                }
+                else if (strOpType == "bdap_delete_link_request") {
+                    uint256 prevTxId;
+                    if (!GetLinkRequestIndex(vchValue, prevTxId)) {
+                        strFailReason = _("Link accept pubkey could not be found.");
+                        return false;
+                    }
+                    CTransactionRef prevTx;
+                    if (!GetPreviousTxRefById(prevTxId, prevTx)) {
+                        strFailReason = _("Previous delete link request transaction could not be found.");
+                        return false;
+                    }
+                    CScript prevScriptPubKey;
+                    GetBDAPOpScript(prevTx, prevScriptPubKey);
+                    GetBDAPCoins(vAvailableCoins, prevScriptPubKey);
+                }
+                else if (strOpType == "bdap_delete_link_accept") {
+                    uint256 prevTxId;
+                    if (!GetLinkAcceptIndex(vchValue, prevTxId)) {
+                        strFailReason = _("Link accept pubkey could not be found.");
+                        return false;
+                    }
+                    CTransactionRef prevTx;
+                    if (!GetPreviousTxRefById(prevTxId, prevTx)) {
+                        strFailReason = _("Previous delete link accept transaction could not be found.");
+                        return false;
+                    }
+                    CScript prevScriptPubKey;
+                    GetBDAPOpScript(prevTx, prevScriptPubKey);
+                    GetBDAPCoins(vAvailableCoins, prevScriptPubKey);
+                }
+                else if (strOpType == "bdap_update_link_accept") {
+                    strFailReason = strOpType + _(" not implemented yet.");
+                    return false;
+                }
+                else if (strOpType == "bdap_update_link_request") {
+                    strFailReason = strOpType + _(" not implemented yet.");
+                    return false;
+                }
+                else {
+                    strFailReason = strOpType + _(" is an uknown BDAP operation.");
+                    return false;
                 }
             } else {
                 AvailableCoins(vAvailableCoins, true, coinControl, false, nCoinType, fUseInstantSend);
@@ -3564,7 +3940,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
                 // vouts to the payees
                 for (const auto& recipient : vecSend) {
                     CTxOut txout(recipient.nAmount, recipient.scriptPubKey);
-
+                    
                     if (IsTransactionFluid(recipient.scriptPubKey)) {
                         // Check if fluid transaction is already in the mempool
                         if (fluid.CheckIfExistsInMemPool(mempool, recipient.scriptPubKey, strFailReason)) {
@@ -3645,7 +4021,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
                     //over pay for denominated transactions
                     if (nCoinType == ONLY_DENOMINATED) {
                         nFeeRet += nChange;
-                        wtxNew.mapValue["SS"] = "1";
+                        wtxNew.mapValue["PS"] = "1";
                         // recheck skipped denominations during next mixing
                         privateSendClient.ClearSkippedDenominations();
                     } else {
@@ -3779,11 +4155,13 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
                 }
 
                 if (fIsBDAP) {
-                    // Check the memory pool for a pending tranaction for the same domain entry
-                    CTransactionRef pTxNew = MakeTransactionRef(txNew);
-                    CDomainEntry domainEntry(pTxNew);
-                    if (domainEntry.CheckIfExistsInMemPool(mempool, strFailReason)) {
-                        return false;
+                    if (strOpType == "bdap_new_account" || strOpType == "bdap_delete_account" || strOpType == "bdap_update_account") {
+                        // Check the memory pool for a pending tranaction for the same domain entry
+                        CTransactionRef pTxNew = MakeTransactionRef(txNew);
+                        CDomainEntry domainEntry(pTxNew);
+                        if (domainEntry.CheckIfExistsInMemPool(mempool, strFailReason)) {
+                            return false;
+                        }
                     }
                 }
 
@@ -3811,7 +4189,7 @@ bool CWallet::CreateTransaction(const std::vector<CRecipient>& vecSend, CWalletT
                 }
 
                 if (fUseInstantSend) {
-                    nFeeNeeded = std::max(nFeeNeeded, CTxLockRequest(txNew).GetMinFee());
+                    nFeeNeeded = std::max(nFeeNeeded, CTxLockRequest(txNew).GetMinFee(true));
                 }
 
                 if (coinControl && coinControl->fOverrideFeeRate)
@@ -4037,6 +4415,20 @@ DBErrors CWallet::LoadWallet(bool& fFirstRunRet)
     uiInterface.LoadWallet(this);
 
     return DB_LOAD_OK;
+}
+
+// Goes through all wallet transactions and checks if they are dynode collaterals, in which case these are locked
+// This avoids accidential spending of collaterals. They can still be unlocked manually if a spend is really intended.
+void CWallet::AutoLockDynodeCollaterals()
+{
+    LOCK2(cs_main, cs_wallet);
+    for (const auto& pair : mapWallet) {
+        for (unsigned int i = 0; i < pair.second.tx->vout.size(); ++i) {
+            if (IsMine(pair.second.tx->vout[i]) && !IsSpent(pair.first, i)) {
+                    LockCoin(COutPoint(pair.first, i));
+            }
+        }
+    }
 }
 
 DBErrors CWallet::ZapSelectTx(std::vector<uint256>& vHashIn, std::vector<uint256>& vHashOut)
@@ -4368,7 +4760,7 @@ std::map<CTxDestination, CAmount> CWallet::GetAddressBalances()
                 continue;
 
             int nDepth = pcoin->GetDepthInMainChain();
-            if (nDepth < (pcoin->IsFromMe(ISMINE_ALL) ? 0 : 1))
+            if ((nDepth < (pcoin->IsFromMe(ISMINE_ALL) ? 0 : 1)) && !pcoin->IsLockedByInstantSend())
                 continue;
 
             for (unsigned int i = 0; i < pcoin->tx->vout.size(); i++) {
@@ -4473,26 +4865,26 @@ std::set<std::set<CTxDestination> > CWallet::GetAddressGroupings()
     return ret;
 }
 
-CAmount CWallet::GetAccountBalance(const std::string& strAccount, int nMinDepth, const isminefilter& filter, bool fAddLockConf)
+CAmount CWallet::GetAccountBalance(const std::string& strAccount, int nMinDepth, const isminefilter& filter, bool fAddLocked)
 {
     CWalletDB walletdb(strWalletFile);
-    return GetAccountBalance(walletdb, strAccount, nMinDepth, filter, fAddLockConf);
+    return GetAccountBalance(walletdb, strAccount, nMinDepth, filter, fAddLocked);
 }
 
-CAmount CWallet::GetAccountBalance(CWalletDB& walletdb, const std::string& strAccount, int nMinDepth, const isminefilter& filter, bool fAddLockConf)
+CAmount CWallet::GetAccountBalance(CWalletDB& walletdb, const std::string& strAccount, int nMinDepth, const isminefilter& filter, bool fAddLocked)
 {
     CAmount nBalance = 0;
 
     // Tally wallet transactions
     for (std::map<uint256, CWalletTx>::iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
         const CWalletTx& wtx = (*it).second;
-        if (!CheckFinalTx(wtx) || wtx.GetBlocksToMaturity() > 0 || wtx.GetDepthInMainChain(fAddLockConf) < 0)
+        if (!CheckFinalTx(wtx) || wtx.GetBlocksToMaturity() > 0 || wtx.GetDepthInMainChain() < 0)
             continue;
 
         CAmount nReceived, nSent, nFee;
         wtx.GetAccountAmounts(strAccount, nReceived, nSent, nFee, filter);
 
-        if (nReceived != 0 && wtx.GetDepthInMainChain(fAddLockConf) >= nMinDepth)
+        if (nReceived != 0 && ((wtx.GetDepthInMainChain() >= nMinDepth) || (fAddLocked && wtx.IsLockedByInstantSend())))
             nBalance += nReceived;
         nBalance -= nSent + nFee;
     }
@@ -4594,9 +4986,9 @@ bool CWallet::UpdatedTransaction(const uint256& hashTx)
     return false;
 }
 
-void CWallet::GetScriptForMining(boost::shared_ptr<CReserveScript>& script)
+void CWallet::GetScriptForMining(std::shared_ptr<CReserveScript>& script)
 {
-    boost::shared_ptr<CReserveKey> rKey(new CReserveKey(this));
+    std::shared_ptr<CReserveKey> rKey(new CReserveKey(this));
     CPubKey pubkey;
     if (!rKey->GetReservedKey(pubkey, false))
         return;
@@ -7275,7 +7667,7 @@ void CMerkleTx::SetMerkleBranch(const CBlockIndex* pindex, int posInBlock)
     nIndex = posInBlock;
 }
 
-int CMerkleTx::GetDepthInMainChain(const CBlockIndex*& pindexRet, bool enableIS) const
+int CMerkleTx::GetDepthInMainChain(const CBlockIndex*& pindexRet) const
 {
     int nResult;
 
@@ -7302,10 +7694,12 @@ int CMerkleTx::GetDepthInMainChain(const CBlockIndex*& pindexRet, bool enableIS)
         }
     }
 
-    if (enableIS && nResult < 10 && instantsend.IsLockedInstantSendTransaction(GetHash()))
-        return nInstantSendDepth + nResult;
-
     return nResult;
+}
+
+bool CMerkleTx::IsLockedByInstantSend() const
+{
+    return instantsend.IsLockedInstantSendTransaction(GetHash());
 }
 
 int CMerkleTx::GetBlocksToMaturity() const

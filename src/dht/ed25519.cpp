@@ -119,6 +119,32 @@ std::vector<unsigned char> CKeyEd25519::GetPrivSeed() const
     return std::vector<unsigned char>(strPrivateSeedKey.begin(), strPrivateSeedKey.end());
 }
 
+std::vector<unsigned char> CKeyEd25519::GetPrivKeyBytes() const
+{
+    std::vector<unsigned char> vchRawPrivKey;
+    for(unsigned int i = 0; i < sizeof(privateKey); i++) {
+        vchRawPrivKey.push_back(privateKey[i]);
+    }
+    return vchRawPrivKey;
+}
+
+std::vector<unsigned char> CKeyEd25519::GetPubKeyBytes() const
+{
+    std::vector<unsigned char> vchRawPubKey;
+    for(unsigned int i = 0; i < sizeof(publicKey); i++) {
+        vchRawPubKey.push_back(publicKey[i]);
+    }
+    return vchRawPubKey;
+}
+
+std::vector<unsigned char> CKeyEd25519::GetPrivSeedBytes() const
+{
+    std::vector<unsigned char> vchRawPrivSeed;
+    for(unsigned int i = 0; i < sizeof(seed); i++) {
+        vchRawPrivSeed.push_back(seed[i]);
+    }
+    return vchRawPrivSeed;
+}
 void ECC_Ed25519_Start() 
 {
     assert(ed25519_context_sign == NULL);
@@ -149,4 +175,56 @@ void ECC_Ed25519_Stop()
     ed25519_context_sign = NULL;
     strSeed = aux::to_hex(ctx->seed);
     assert(ed25519_context_sign == NULL);
+}
+
+static unsigned char const* StardardArrayToArrayPtr32(const std::array<char, 32>& stdArray32)
+{
+    return reinterpret_cast<unsigned char const*>(stdArray32.data());
+}
+
+static unsigned char const* StardardArrayToArrayPtr64(const std::array<char, 64>& stdArray64)
+{
+    return reinterpret_cast<unsigned char const*>(stdArray64.data());
+}
+
+static std::array<char, 32> ArrayPtrToStandardArray32(const unsigned char* pArray)
+{
+    //TODO (bdap): Improve this conversion function
+    std::array<char, 32> arr32;
+    for(unsigned int i = 0; i < 32; i++) {
+         arr32[i] = (char)pArray[i];
+    }
+    return arr32;
+}
+
+std::vector<unsigned char> GetLinkSharedPubKey(const CKeyEd25519& dhtKey, const std::vector<unsigned char>& vchRecipientPubKey)
+{
+    // convert private key
+    unsigned char const* private_key = StardardArrayToArrayPtr64(dhtKey.privateKey);
+    // convert public key
+    unsigned char const* public_key;
+    std::array<char, ED25519_PUBLIC_KEY_BYTE_LENGTH> arrPubKey;
+    std::string strRecipientPubKey = StringFromVch(vchRecipientPubKey);
+    aux::from_hex(strRecipientPubKey, arrPubKey.data());
+    public_key = StardardArrayToArrayPtr32(arrPubKey);
+    // get shared secret key
+    std::array<char, 32> secret;
+    unsigned char* shared_secret = reinterpret_cast<unsigned char*>(secret.data());
+    ed25519_key_exchange(shared_secret, public_key, private_key);
+    std::array<char, 32> sharedSeed = ArrayPtrToStandardArray32(shared_secret);
+    CKeyEd25519 keyShared(sharedSeed);
+    return keyShared.GetPubKey();
+}
+
+std::vector<unsigned char> EncodedPubKeyToBytes(const std::vector<unsigned char>& vchEncodedPubKey)
+{
+    // TODO (bdap): Use a more efficient way to convert the hex encoded pubkey to bytes
+    std::vector<unsigned char> vchPubKeyBytes;
+    std::string strEncodedPubKey = StringFromVch(vchEncodedPubKey);
+    std::array<char, ED25519_PUBLIC_KEY_BYTE_LENGTH> pubkey;
+    aux::from_hex(strEncodedPubKey, pubkey.data());
+    for(unsigned int i = 0; i < sizeof(pubkey); i++) {
+        vchPubKeyBytes.push_back(pubkey[i]);
+    }
+    return vchPubKeyBytes;
 }

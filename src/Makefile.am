@@ -6,7 +6,7 @@ AM_CPPFLAGS = $(HARDENED_CPPFLAGS)
 EXTRA_LIBRARIES =
 
 DYNAMIC_CONFIG_INCLUDES=-I$(builddir)/config
-DYNAMIC_INCLUDES=-I$(builddir) -I$(builddir)/obj $(BOOST_CPPFLAGS) $(LEVELDB_CPPFLAGS) $(LIBTORRENT_CPPFLAGS) $(CRYPTO_CFLAGS) $(SSL_CFLAGS)
+DYNAMIC_INCLUDES=-I$(builddir) -I$(builddir)/obj $(BOOST_CPPFLAGS) $(LEVELDB_CPPFLAGS) $(LIBTORRENT_CPPFLAGS) $(LIBVGP_CPPFLAGS) $(CRYPTO_CFLAGS) $(SSL_CFLAGS)
 
 DYNAMIC_INCLUDES += -I$(srcdir)/secp256k1/include
 DYNAMIC_INCLUDES += -I$(srcdir)/univalue/include
@@ -27,10 +27,6 @@ $(LIBSECP256K1): $(wildcard secp256k1/src/*) $(wildcard secp256k1/include/*)
 
 $(LIBUNIVALUE): $(wildcard univalue/lib/*) $(wildcard univalue/include/*)
 	$(AM_V_at)$(MAKE) $(AM_MAKEFLAGS) -C $(@D) $(@F)
-
-if EMBEDDED_LIBTORRENT
-include Makefile.libtorrent.include
-endif
 
 # Make is not made aware of per-object dependencies to avoid limiting building parallelization
 # But to build the less dependent modules first, we manually select their order here:
@@ -84,13 +80,22 @@ DYNAMIC_CORE_H = \
   bdap/bdap.h \
   bdap/domainentry.h \
   bdap/domainentrydb.h \
-  bdap/entrycertificate.h \
-  bdap/entrychannel.h \
+  bdap/certificate.h \
   bdap/entrycheckpoints.h \
-  bdap/entrylink.h \
   bdap/identity.h \
   bech32.h \
+  bdap/linking.h \
+  bdap/linkingdb.h \
+  bdap/sidechain.h \
+  bdap/utils.h \
+  bip39_chinese_simplified.h \
+  bip39_chinese_traditional.h \
   bip39_english.h \
+  bip39_french.h \
+  bip39_italian.h \
+  bip39_japanese.h \
+  bip39_korean.h \
+  bip39_spanish.h \
   bip39.h \
   blockencodings.h \
   bloom.h \
@@ -114,7 +119,6 @@ DYNAMIC_CORE_H = \
   core_memusage.h \
   cuckoocache.h \
   dbwrapper.h \
-  dht/curve25519.h \
   dht/ed25519.h \
   dht/mutable.h \
   dht/mutabledb.h \
@@ -160,8 +164,16 @@ DYNAMIC_CORE_H = \
   memusage.h \
   merkleblock.h \
   messagesigner.h \
-  miner-gpu.h \
-  miner.h \
+  miner/impl/miner-cpu.h \
+  miner/impl/miner-gpu.h \
+  miner/internal/hash-rate-counter.h \
+  miner/internal/miner-base.h \
+  miner/internal/miner-context.h \
+  miner/internal/miners-controller.h \
+  miner/internal/miners-group.h \
+  miner/internal/thread-group.h \
+  miner/miner-util.h \
+  miner/miner.h \
   net.h \
   net_processing.h \
   netaddress.h \
@@ -219,6 +231,7 @@ DYNAMIC_CORE_H = \
   wallet/coincontrol.h \
   wallet/crypter.h \
   wallet/db.h \
+  wallet/mnemonic/mnemonic.h \
   wallet/rpcwallet.h \
   wallet/wallet.h \
   wallet/wallet_ismine.h \
@@ -250,15 +263,17 @@ libdynamic_server_a_SOURCES = \
   bdap/auditdata.cpp \
   bdap/domainentry.cpp \
   bdap/domainentrydb.cpp \
-  bdap/entrycertificate.cpp \
-  bdap/entrychannel.cpp \
+  bdap/certificate.cpp \
   bdap/entrycheckpoints.cpp \
-  bdap/entrylink.cpp \
   bdap/identity.cpp \
   bdap/linking.cpp \
+  bdap/linkingdb.cpp \
   bdap/rpcdomainentry.cpp \
+  bdap/rpclinking.cpp \
+  bdap/rpcrawbdap.cpp \
+  bdap/sidechain.cpp \
+  bdap/utils.cpp \
   dbwrapper.cpp \
-  dht/curve25519.cpp \
   dht/mutable.cpp \
   dht/mutabledb.cpp \
   dht/operations.cpp \
@@ -291,7 +306,14 @@ libdynamic_server_a_SOURCES = \
   instantsend.cpp \
   merkleblock.cpp \
   messagesigner.cpp \
-  miner.cpp \
+  miner/impl/miner-cpu.cpp \
+  miner/impl/miner-gpu.cpp \
+  miner/internal/hash-rate-counter.cpp \
+  miner/internal/miner-base.cpp \
+  miner/internal/miner-context.cpp \
+  miner/internal/miners-controller.cpp \
+  miner/miner-util.cpp \
+  miner/miner.cpp \
   net.cpp \
   netfulfilledman.cpp \
   net_processing.cpp \
@@ -350,6 +372,7 @@ libdynamic_wallet_a_SOURCES = \
   key/stealth.cpp \
   wallet/crypter.cpp \
   wallet/db.cpp \
+  wallet/mnemonic/mnemonic.cpp \
   wallet/rpcdump.cpp \
   wallet/rpcwallet.cpp \
   wallet/wallet.cpp \
@@ -363,25 +386,25 @@ crypto_libdynamic_crypto_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS) $(PIC_FLAGS)
 crypto_libdynamic_crypto_a_SOURCES = \
   crypto/aes.cpp \
   crypto/aes.h \
+  crypto/argon2d/argon2.c \
+  crypto/argon2d/argon2.h \
+  crypto/argon2d/core.c \
+  crypto/argon2d/core.h \
+  crypto/argon2d/encoding.c \
+  crypto/argon2d/encoding.h \
+  crypto/argon2d/opt.c \
+  crypto/argon2d/thread.c \
+  crypto/argon2d/thread.h \
+  crypto/blake2/blake2-impl.h \
+  crypto/blake2/blake2.h \
+  crypto/blake2/blake2b.c \
+  crypto/blake2/blamka-round-opt.h \
+  crypto/blake2/blamka-round-ref.h \
   crypto/chacha20.cpp \
   crypto/chacha20.h \
   crypto/common.h \
   crypto/crypter.cpp \
   crypto/crypter.h \
-  crypto/argon2d/argon2.h \
-  crypto/argon2d/core.h \
-  crypto/argon2d/encoding.h \
-  crypto/argon2d/thread.h \
-  crypto/argon2d/argon2.c \
-  crypto/argon2d/core.c \
-  crypto/argon2d/encoding.c \
-  crypto/argon2d/opt.c \
-  crypto/argon2d/thread.c \
-  crypto/blake2/blake2b.c \
-  crypto/blake2/blake2.h \
-  crypto/blake2/blake2-impl.h \
-  crypto/blake2/blamka-round-opt.h \
-  crypto/blake2/blamka-round-ref.h \
   crypto/hmac_sha256.cpp \
   crypto/hmac_sha256.h \
   crypto/hmac_sha512.cpp \
@@ -392,6 +415,10 @@ crypto_libdynamic_crypto_a_SOURCES = \
   crypto/sha1.h \
   crypto/sha256.cpp \
   crypto/sha256.h \
+  crypto/sha256_avx2.cpp \
+  crypto/sha256_shani.cpp \
+  crypto/sha256_sse4.cpp \
+  crypto/sha256_sse41.cpp \
   crypto/sha512.cpp \
   crypto/sha512.h
 
@@ -512,6 +539,7 @@ dynamicd_LDADD = \
   $(LIBDYNAMIC_UTIL) \
   $(LIBDYNAMIC_CONSENSUS) \
   $(LIBDYNAMIC_CRYPTO) \
+  $(LIBVGP) \
   $(LIBLEVELDB) \
   $(LIBLEVELDB_SSE42) \
   $(LIBMEMENV) \
@@ -563,6 +591,7 @@ dynamic_tx_LDADD = \
   $(LIBDYNAMIC_UTIL) \
   $(LIBDYNAMIC_CONSENSUS) \
   $(LIBDYNAMIC_CRYPTO) \
+  $(LIBVGP) \
   $(LIBSECP256K1)  \
   $(LIBTORRENT)
 
@@ -595,10 +624,13 @@ EXTRA_DIST = $(CTAES_DIST)
 CLEANFILES = leveldb/libleveldb.a leveldb/libmemenv.a
 CLEANFILES += *.gcda *.gcno
 CLEANFILES += bdap/*.gcda bdap/*.gcno
+CLEANFILES += bdap/vgp/*.gcda bdap/vgp/*.gcno
 CLEANFILES += compat/*.gcda compat/*.gcno
 CLEANFILES += consensus/*.gcda consensus/*.gcno
 CLEANFILES += crypto/*.gcda crypto/*.gcno
+CLEANFILES += dht/*.gcda dht/*.gcno
 CLEANFILES += fluid/*.gcda fluid/*.gcno
+CLEANFILES += miner/*.gcda miner/*.gcno
 CLEANFILES += policy/*.gcda policy/*.gcno
 CLEANFILES += primitives/*.gcda primitives/*.gcno
 CLEANFILES += script/*.gcda script/*.gcno
@@ -646,6 +678,12 @@ endif
 if EMBEDDED_LEVELDB
 include Makefile.leveldb.include
 endif
+
+if EMBEDDED_LIBTORRENT
+include Makefile.libtorrent.include
+endif
+
+include Makefile.vgp.include
 
 if ENABLE_GPU
 include Makefile.gpu.include

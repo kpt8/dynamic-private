@@ -1,15 +1,15 @@
-// Copyright (c) 2016-2018 Duality Blockchain Solutions Developers
-// Copyright (c) 2017-2018 The Particl Core developers
-// Copyright (c) 2014-2018 The Dash Core Developers
-// Copyright (c) 2009-2018 The Bitcoin Developers
-// Copyright (c) 2009-2018 Satoshi Nakamoto
+// Copyright (c) 2016-2019 Duality Blockchain Solutions Developers
+// Copyright (c) 2017-2019 The Particl Core developers
+// Copyright (c) 2014-2019 The Dash Core Developers
+// Copyright (c) 2009-2019 The Bitcoin Developers
+// Copyright (c) 2009-2019 Satoshi Nakamoto
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "wallet/walletdb.h"
 
 #include "base58.h"
-#include "bdap/domainentry.h"
+#include "bdap/utils.h"
 #include "dht/ed25519.h"
 #include "consensus/validation.h"
 #include "key_io.h"
@@ -96,7 +96,7 @@ bool CWalletDB::EraseTx(uint256 hash)
 bool CWalletDB::WriteDHTKey(const CKeyEd25519& key, const std::vector<unsigned char>& vchPubKey, const CKeyMetadata& keyMeta)
 {
     CKeyID keyID(Hash160(vchPubKey.begin(), vchPubKey.end()));
-    if (!Write(std::make_pair(std::string("keymeta"), keyID), keyMeta, false))
+    if (!Write(std::make_pair(std::string("dhtkeymeta"), keyID), keyMeta, false))
         return false;
 
     nWalletDBUpdated++;
@@ -641,7 +641,8 @@ bool ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue, CW
             }
         }
     } catch (...) {
-        return false;
+        if (strType != "keymeta")
+            return false;
     }
     return true;
 }
