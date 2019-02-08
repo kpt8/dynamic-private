@@ -6,6 +6,7 @@
 
 #include "bdap/utils.h"
 #include "base58.h"
+#include "key_io.h"
 #include "validation.h"
 #include "validationinterface.h"
 

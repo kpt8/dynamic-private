@@ -1198,8 +1198,6 @@ public:
     bool SetHDChain(const CHDChain& chain, bool memonly);
     bool SetCryptedHDChain(const CHDChain& chain, bool memonly);
     bool GetDecryptedHDChain(CHDChain& hdChainRet);
-    // Returns local BDAP DHT Public keys
-    bool GetDHTPubKeys(std::vector<std::vector<unsigned char>>& vvchDHTPubKeys) const;
     //! Begin add for stealth address transactions
     CWalletDB* GetWalletDB();
     int ExtKeyNew32(CExtKey& out);

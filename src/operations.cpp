@@ -3,17 +3,20 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "operations.h"
-#include "validation.h"
 
-#include "key_io.h"
+//#include "key_io.h"
 #include "wallet/wallet.h"
 #include "wallet/walletdb.h"
+#include "validation.h"
 
+#include <string>
 #include <boost/algorithm/string.hpp>
 
 #ifdef ENABLE_WALLET
 extern CWallet* pwalletMain;
 #endif //ENABLE_WALLET
+
+
 
 /////////////////////////////////////////////////////////////
 //
@@ -24,6 +27,45 @@ extern CWallet* pwalletMain;
 std::string SignatureDelimiter = " ";
 std::string PrimaryDelimiter = "@";
 std::string SubDelimiter = "$";
+
+std::string HexFunctions::StringToHex(std::string input)
+{
+    static const char* const lut = "0123456789ABCDEF";
+    size_t len = input.length();
+    std::string output;
+    output.reserve(2 * len);
+    for (size_t i = 0; i < len; ++i) {
+        const unsigned char c = input[i];
+        output.push_back(lut[c >> 4]);
+        output.push_back(lut[c & 15]);
+    }
+
+    return output;
+}
+std::string HexFunctions::HexToString(std::string hex)
+{
+    int len = hex.length();
+    std::string newString;
+    for (int i = 0; i < len; i += 2) {
+        std::string byte = hex.substr(i, 2);
+        char chr = (char)(int)strtol(byte.c_str(), nullptr, 16);
+        newString.push_back(chr);
+    }
+
+    return newString;
+}
+
+void HexFunctions::ConvertToHex(std::string& input)
+{
+    std::string output = StringToHex(input);
+    input = output;
+}
+
+void HexFunctions::ConvertToString(std::string& input)
+{
+    std::string output = HexToString(input);
+    input = output;
+}
 
 void ScrubString(std::string& input, bool forInteger)
 {
