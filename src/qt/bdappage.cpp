@@ -1,3 +1,7 @@
+// Copyright (c) 2016-2019 Duality Blockchain Solutions Developers
+// Distributed under the MIT/X11 software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
 #include "bdappage.h"
 #include "ui_bdappage.h"
 #include "bdapadduserdialog.h"
@@ -6,12 +10,14 @@
 #include "guiutil.h"
 #include "walletmodel.h"
 #include "bdapaccounttablemodel.h"
+#include "bdaplinktablemodel.h"
 
-#include "rpcregister.h" //NEED TO MOVE
-#include "rpcserver.h" //NEED TO MOVE
-#include "rpcclient.h" //NEED TO MOVE
+#include "rpcregister.h"
+#include "rpcserver.h"
+#include "rpcclient.h"
 
 #include <stdio.h>
+
 #include <boost/algorithm/string.hpp>
 
 #include <QTableWidget>
@@ -23,15 +29,9 @@ BdapPage::BdapPage(const PlatformStyle* platformStyle, QWidget* parent) : QWidge
     ui->setupUi(this);
     
     evaluateTransactionButtons();
-    //Initialize QWidgetTable names
-    // if (ui->tableWidget_Users->objectName().isEmpty())
-    //     ui->tableWidget_Users->setObjectName(QStringLiteral("BDAPUsersTable"));
-
-    // if (ui->tableWidget_Groups->objectName().isEmpty())
-    //     ui->tableWidget_Groups->setObjectName(QStringLiteral("BDAPGroupsTable"));
-
 
     bdapAccountTableModel = new BdapAccountTableModel(this);
+    bdapLinkTableModel = new BdapLinkTableModel(this);
 
     ui->lineEditUserCommonNameSearch->setFixedWidth(COMMONNAME_COLWIDTH);
     ui->lineEditUserFullPathSearch->setFixedWidth(FULLPATH_COLWIDTH);
@@ -69,6 +69,13 @@ BdapPage::BdapPage(const PlatformStyle* platformStyle, QWidget* parent) : QWidge
 
     connect(ui->tableWidget_Groups, SIGNAL(cellDoubleClicked(int,int)), this, SLOT(getGroupDetails(int,int)));
 
+    //Links tab
+    connect(ui->pushButtonRefreshComplete, SIGNAL(clicked()), this, SLOT(listLinksComplete()));
+    connect(ui->pushButtonRefreshPendingAccept, SIGNAL(clicked()), this, SLOT(listPendingAccept()));
+    connect(ui->pushButtonRefreshPendingRequest, SIGNAL(clicked()), this, SLOT(listPendingRequest()));
+
+    
+
 }
 
 BdapPage::~BdapPage()
@@ -102,6 +109,22 @@ void BdapPage::evaluateTransactionButtons()
 
 } //evaluateTransactionButtons
 
+
+//Links tab =========================================================================
+void BdapPage::listLinksComplete()
+{
+    bdapLinkTableModel->refreshComplete();
+} //listLinksComplete
+
+void BdapPage::listPendingAccept()
+{
+    bdapLinkTableModel->refreshPendingAccept();
+} //listPendingAccept
+
+void BdapPage::listPendingRequest()
+{
+    bdapLinkTableModel->refreshPendingRequest();
+} //listPendingRequest
 
 //Groups tab ========================================================================
 void BdapPage::listAllGroups()
@@ -315,6 +338,30 @@ BdapAccountTableModel* BdapPage::getBdapAccountTableModel()
     return bdapAccountTableModel;
 }
 
+BdapLinkTableModel* BdapPage::getBdapLinkTableModel()
+{
+    return bdapLinkTableModel;
+}
+
+
+QTableWidget* BdapPage::getCompleteTable() 
+{ 
+    return ui->tableWidgetComplete; 
+}
+
+
+QTableWidget* BdapPage::getPendingAcceptTable() 
+{ 
+    return ui->tableWidgetPendingAccept; 
+    
+}
+
+QTableWidget* BdapPage::getPendingRequestTable() 
+{ 
+    return ui->tableWidgetPendingRequest; 
+    
+}
+
 
 QTableWidget* BdapPage::getUserTable() 
 { 
@@ -331,6 +378,22 @@ QLabel* BdapPage::getUserStatus()
 {
     return ui->labelUserStatus;
 }
+
+QLabel* BdapPage::getLinkCompleteRecords()
+{
+    return ui->labelCompleteRecords;
+}
+
+QLabel* BdapPage::getPendingAcceptRecords()
+{
+    return ui->labelPARecords;
+}
+
+QLabel* BdapPage::getPendingRequestRecords()
+{
+    return ui->labelPRRecords;
+}
+
 
 QLabel* BdapPage::getGroupStatus()
 {

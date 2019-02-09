@@ -2,8 +2,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef DYNAMIC_QT_BDAPACCOUNTTABLEMODEL_H
-#define DYNAMIC_QT_BDAPACCOUNTTABLEMODEL_H
+#ifndef DYNAMIC_QT_BDAPLINKTABLEMODEL_H
+#define DYNAMIC_QT_BDAPLINKTABLEMODEL_H
 
 #include <QAbstractTableModel>
 #include <QStringList>
@@ -13,36 +13,35 @@
 #include <memory>
 
 class BdapPage;
-class BdapAccountTablePriv;
+class BdapLinkTablePriv;
 
 QT_BEGIN_NAMESPACE
 class QTimer;
 QT_END_NAMESPACE
 
-struct CAccountStats {
+struct CAccountStats2 {
     unsigned int count;
 };
 
 /**
    Qt model providing information about BDAP users and groups.
  */
-class BdapAccountTableModel : public QAbstractTableModel
+class BdapLinkTableModel : public QAbstractTableModel
 {
     Q_OBJECT
 
 public:
-    explicit BdapAccountTableModel(BdapPage* parent = 0);
-    ~BdapAccountTableModel();
+    explicit BdapLinkTableModel(BdapPage* parent = 0);
+    ~BdapLinkTableModel();
 
-    void startAutoRefresh();
-    void stopAutoRefresh();
-    void refreshUsers();
-    void refreshGroups();
+    void refreshComplete();
+    void refreshPendingAccept();
+    void refreshPendingRequest();
 
     enum ColumnIndex {
-        CommonName = 0,
-        ObjectFullPath = 1,
-        ExpirationDate = 2
+        Requestor = 0,
+        Recipient = 1,
+        Date = 2
     };
 
     /** @name Methods overridden from QAbstractTableModel
@@ -54,7 +53,7 @@ public:
     QModelIndex index(int row, int column, const QModelIndex& parent) const;
     Qt::ItemFlags flags(const QModelIndex& index) const;
     void sort(int column, Qt::SortOrder order);
-    /*@}*/
+   /*@}*/
 
 public Q_SLOTS:
     void refresh();
@@ -62,20 +61,18 @@ public Q_SLOTS:
 private:
     BdapPage* bdapPage;
     QStringList columns;
-    std::unique_ptr<BdapAccountTablePriv> priv;
     QTimer* timer;
-    int currentIndex;
-    QTableWidget* userTable;
-    QTableWidget* groupTable;
-    QLabel* userStatus;
-    QLabel* groupStatus;
-    bool myUsersChecked;
-    bool myGroupsChecked;
-    std::string searchUserCommon;
-    std::string searchUserPath;
-    std::string searchGroupCommon;
-    std::string searchGroupPath;
+    std::unique_ptr<BdapLinkTablePriv> priv;
+
+    QTableWidget* completeTable;
+    QLabel* completeStatus;
+
+    QTableWidget* pendingAcceptTable;
+    QLabel* pendingAcceptStatus;
+
+    QTableWidget* pendingRequestTable;
+    QLabel* pendingRequestStatus;       
     
 };
 
-#endif // DYNAMIC_QT_BDAPACCOUNTTABLEMODEL_H
+#endif // DYNAMIC_QT_BDAPLINKTABLEMODEL_H
